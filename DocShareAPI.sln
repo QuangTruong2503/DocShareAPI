@@ -3,7 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.11.35431.28
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DocShareAPI", "DocShareAPI\DocShareAPI.csproj", "{F938ED14-1D2E-4A68-8032-75EDBCF7DF16}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "DocShareAPI", "DocShareAPI\DocShareAPI.csproj", "{F938ED14-1D2E-4A68-8032-75EDBCF7DF16}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConsoleApp1", "ConsoleApp1\ConsoleApp1.csproj", "{630CC688-5B54-4C3A-8389-89CEABF108F8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,6 +17,10 @@ Global
 		{F938ED14-1D2E-4A68-8032-75EDBCF7DF16}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F938ED14-1D2E-4A68-8032-75EDBCF7DF16}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F938ED14-1D2E-4A68-8032-75EDBCF7DF16}.Release|Any CPU.Build.0 = Release|Any CPU
+		{630CC688-5B54-4C3A-8389-89CEABF108F8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{630CC688-5B54-4C3A-8389-89CEABF108F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{630CC688-5B54-4C3A-8389-89CEABF108F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{630CC688-5B54-4C3A-8389-89CEABF108F8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
