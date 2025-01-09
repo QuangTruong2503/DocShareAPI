@@ -1,0 +1,6 @@
+@DocShareAPI_HostAddress = http://localhost:5252
+
+GET {{DocShareAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
