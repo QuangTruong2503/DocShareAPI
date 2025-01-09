@@ -1,4 +1,7 @@
 ﻿using DocShareAPI.Data;
+using DocShareAPI.DataTransferObject;
+using DocShareAPI.Models;
+using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,9 +14,24 @@ namespace DocShareAPI.Controllers
     public class UsersController : ControllerBase
     {
         private readonly DocShareDbContext _context;
-        public UsersController(DocShareDbContext context)
+        //Khai báo dịch vụ token
+        private readonly TokenServices _tokenServices;
+        private readonly IConfiguration _configuration;
+        public UsersController(DocShareDbContext context, IConfiguration configuration)
         {
             _context = context;
+            _configuration = configuration;
+            //Lấy dữ liệu TokenKey từ biến môi trường
+            string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
+            if (string.IsNullOrEmpty(tokenScretKey))
+            {
+                Console.WriteLine("Không có khóa token được sử dụng trong LoginController");
+                tokenScretKey = _configuration.GetValue<string>("TokenSecretKey");
+            }
+            if (tokenScretKey != null)
+            {
+                _tokenServices = new TokenServices(tokenScretKey);
+            }
         }
         // GET: api/<UsersController>
         [HttpGet]
@@ -38,6 +56,53 @@ namespace DocShareAPI.Controllers
         {
             return "value";
         }
+
+        //Login
+        [HttpPost("request-login")]
+        public async Task<IActionResult> Login([FromBody] LoginRequest loginRequest)
+        {
+            if (string.IsNullOrEmpty(loginRequest.Email) || string.IsNullOrEmpty(loginRequest.Password))
+            {
+                return BadRequest(new
+                {
+                    message = "Email và mật khẩu không được để trống.",
+                    isLogin = false
+                });
+            }
+
+            var user = await _context.USERS
+                .Where(u => u.Email == loginRequest.Email)
+                .Select(u => new { u.user_id, u.Role, u.password_hash })
+                .FirstOrDefaultAsync();
+
+            if (user == null)
+            {
+                // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
+                return BadRequest(new
+                {
+                    message = "Email không tồn tại.",
+                    isLogin = false
+                });
+            }
+            else if(!PasswordHasher.VerifyPassword(loginRequest.Password, user.password_hash))
+            {
+                // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
+                return BadRequest(new
+                {
+                    message = "Mật khẩu không chính xác.",
+                    isLogin = false
+                });
+            }
+            var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
+
+            return Ok(new
+            {
+                message = "Đăng nhập thành công!",
+                success = true,
+                token
+            });
+        }
+
 
         // POST api/<UsersController>
         [HttpPost]
