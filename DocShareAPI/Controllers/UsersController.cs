@@ -40,6 +40,7 @@ namespace DocShareAPI.Controllers
             var list = await _context.USERS.Select(u => new
             {
                 u.user_id,
+                u.Username,
                 u.full_name,
                 u.Email,
                 u.avatar_url,
@@ -63,51 +64,97 @@ namespace DocShareAPI.Controllers
         {
             if (string.IsNullOrEmpty(loginRequest.Email) || string.IsNullOrEmpty(loginRequest.Password))
             {
-                return BadRequest(new
+                return Ok(new
                 {
                     message = "Email và mật khẩu không được để trống.",
                     isLogin = false
                 });
             }
 
-            var user = await _context.USERS
-                .Where(u => u.Email == loginRequest.Email)
-                .Select(u => new { u.user_id, u.Role, u.password_hash })
+            try
+            {
+                var user = await _context.USERS
+                .Where(u => u.Email == loginRequest.Email || u.Username == loginRequest.Email)
                 .FirstOrDefaultAsync();
 
-            if (user == null)
-            {
-                // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
-                return BadRequest(new
+                if (user == null)
                 {
-                    message = "Email không tồn tại.",
-                    isLogin = false
-                });
-            }
-            else if(!PasswordHasher.VerifyPassword(loginRequest.Password, user.password_hash))
-            {
-                // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
-                return BadRequest(new
+                    // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
+                    return Ok(new
+                    {
+                        message = "Tài khoản hoặc email không tồn tại.",
+                        isLogin = false
+                    });
+                }
+                else if (!PasswordHasher.VerifyPassword(loginRequest.Password, user.password_hash))
                 {
-                    message = "Mật khẩu không chính xác.",
-                    isLogin = false
-                });
-            }
-            var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
+                    // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
+                    return Ok(new
+                    {
+                        message = "Mật khẩu không chính xác.",
+                        isLogin = false
+                    });
+                }
+                var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
 
-            return Ok(new
+                return Ok(new
+                {
+                    message = "Đăng nhập thành công!",
+                    success = true,
+                    token,
+                    user = new {Email = user.Email, FullName = user.full_name, AvatarUrl = user.avatar_url}
+                });
+            }
+            catch (Exception ex)
             {
-                message = "Đăng nhập thành công!",
-                success = true,
-                token
-            });
+                return BadRequest(ex.Message);
+            }
         }
 
 
-        // POST api/<UsersController>
-        [HttpPost]
-        public void Post([FromBody] string value)
+        //Register / Đăng ký thành viên
+        [HttpPost("request-register")]
+        public async Task<IActionResult> Register([FromBody] LoginRequest request)
         {
+            if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
+            {
+                return BadRequest(new
+                {
+                    message = "Email và password không được để trống",
+                    success = false
+                });
+            }
+            try
+            {
+                if (await _context.USERS.AnyAsync(u => u.Email.Equals(request.Email)))
+                {
+                    return Ok(new
+                    {
+                        message = "Email này đã được sử dụng",
+                        success = false
+                    });
+                }
+                var newUser = new Users
+                {
+                    user_id = Guid.NewGuid(),
+                    Username = request.Email.Split('@')[0],
+                    Email = request.Email,
+                    password_hash = PasswordHasher.HashPassword(request.Password)
+                };
+
+                _context.USERS.Add(newUser);
+                await _context.SaveChangesAsync();
+                return Ok(new
+                {
+                    message = "Đăng ký thành công",
+                    success = true
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest($"Lỗi khi đăng ký tài khoản {ex.Message}");
+            }
+           
         }
 
         // PUT api/<UsersController>/5
