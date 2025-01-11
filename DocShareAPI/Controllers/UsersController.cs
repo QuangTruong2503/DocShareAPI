@@ -1,9 +1,12 @@
-﻿using DocShareAPI.Data;
+﻿using CloudinaryDotNet;
+using CloudinaryDotNet.Actions;
+using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
 using DocShareAPI.Models;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -17,8 +20,14 @@ namespace DocShareAPI.Controllers
         //Khai báo dịch vụ token
         private readonly TokenServices _tokenServices;
         private readonly IConfiguration _configuration;
-        public UsersController(DocShareDbContext context, IConfiguration configuration)
+        //Khai báo CLoudinary
+        private readonly Cloudinary _cloudinary;
+        private readonly ILogger<UsersController> _logger;
+
+
+        public UsersController(DocShareDbContext context, IConfiguration configuration, ILogger<UsersController> logger)
         {
+            _logger = logger;
             _context = context;
             _configuration = configuration;
             //Lấy dữ liệu TokenKey từ biến môi trường
@@ -32,6 +41,29 @@ namespace DocShareAPI.Controllers
             {
                 _tokenServices = new TokenServices(tokenScretKey);
             }
+            try
+            {
+                var cloudName = Environment.GetEnvironmentVariable("CLOUDINARY_CLOUD_NAME")
+                    ?? configuration["Cloudinary:CloudName"];
+                var apiKey = Environment.GetEnvironmentVariable("CLOUDINARY_API_KEY")
+                    ?? configuration["Cloudinary:ApiKey"];
+                var apiSecret = Environment.GetEnvironmentVariable("CLOUDINARY_API_SECRET")
+                    ?? configuration["Cloudinary:ApiSecret"];
+
+                if (string.IsNullOrEmpty(cloudName) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
+                {
+                    throw new ArgumentNullException("Cloudinary configuration is incomplete");
+                }
+
+                _cloudinary = new Cloudinary(new Account(cloudName, apiKey, apiSecret));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error initializing Cloudinary: {ex}");
+                throw;
+            }
+
+           
         }
         // GET: api/<UsersController>
         [HttpGet]
@@ -52,10 +84,41 @@ namespace DocShareAPI.Controllers
         }
 
         // GET api/<UsersController>/5
-        [HttpGet("{id}")]
-        public string Get(int id)
+        [HttpGet("my-profile")]
+        public async Task<IActionResult> GetMyProfile(Guid userID)
         {
-            return "value";
+            var user = await _context.USERS.Where(u => u.user_id == userID)
+                .Select(u => new { u.Username , u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified})
+                .FirstOrDefaultAsync();
+            if (user == null)
+            {
+                return BadRequest(new
+                {
+                    message = "Không tìm thấy dữ liệu người dùng.",
+                    success = false
+                });
+            }
+            return Ok(user);
+        }
+
+        [HttpGet("verify-token/{token}")]
+        public IActionResult CheckToken(string token)
+        {
+            var decode = _tokenServices.DecodeToken(token);
+            if (decode == null)
+            {
+                return Ok(new
+                {
+                    message = "Token không hợp lệ",
+                    success = false,
+                });
+            }
+            return Ok(new
+            {
+                success = true,
+                message = "Token hợp lệ",
+                data = decode
+            });
         }
 
         //Login
@@ -157,6 +220,61 @@ namespace DocShareAPI.Controllers
            
         }
 
+        //Cập nhật hình ảnh
+        [HttpPut("update-image")]
+        public async Task<IActionResult> UpdateImage(IFormFile image, Guid userID)
+        {
+            try
+            {
+                //Tìm userID
+                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userID);
+                if (user == null)
+                {
+                    return BadRequest(new
+                    {
+                        message = "Không tìm thấy người dùng",
+                        success = false
+                    });
+                }
+                if (image == null || image.Length == 0)
+                {
+                    _logger.LogWarning("Image upload attempted with null or empty image");
+                    return BadRequest("No image uploaded or image is empty");
+                }
+
+                using (var stream = image.OpenReadStream())
+                {
+                    var uploadParams = new ImageUploadParams
+                    {
+                        File = new FileDescription(image.FileName, stream),
+                        Folder = "images",
+                        Transformation = new Transformation()
+                            .Width(500)
+                            .Height(500)
+                            .Crop("fill")
+                    };
+
+                    var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+
+                    //Cập nhật hình ảnh
+                    user.avatar_url = uploadResult.SecureUrl.ToString();
+                    _context.USERS.Update(user);
+                    await _context.SaveChangesAsync();
+                    return Ok(new
+                    {
+                        message = "Cập nhật ảnh đại diện thành công!",
+                        success = true,
+                        user = new { Email = user.Email, FullName = user.full_name, AvatarUrl = user.avatar_url }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error uploading image: {ex.Message}");
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
         // PUT api/<UsersController>/5
         [HttpPut("{id}")]
         public void Put(int id, [FromBody] string value)
@@ -168,5 +286,6 @@ namespace DocShareAPI.Controllers
         public void Delete(int id)
         {
         }
+
     }
 }
