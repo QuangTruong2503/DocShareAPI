@@ -247,7 +247,7 @@ namespace DocShareAPI.Controllers
                     var uploadParams = new ImageUploadParams
                     {
                         File = new FileDescription(image.FileName, stream),
-                        Folder = "images",
+                        Folder = "DocShare/users",
                         Transformation = new Transformation()
                             .Width(500)
                             .Height(500)
@@ -275,10 +275,55 @@ namespace DocShareAPI.Controllers
             }
         }
 
-        // PUT api/<UsersController>/5
-        [HttpPut("{id}")]
-        public void Put(int id, [FromBody] string value)
+        //Cập nhật thông tin
+        [HttpPut("update-user")]
+        public async Task<IActionResult> UpdateUser([FromBody] UserUpdateDTO userDTO)
         {
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userDTO.user_id);
+            var duplicate = await _context.USERS.AnyAsync(u => u.Username == userDTO.username || u.Email == userDTO.email);
+            if (user == null)
+            {
+                return BadRequest(new
+                {
+                    message = "Không tìm thấy người dùng",
+                    success = false
+                });
+            }
+            // Kiểm tra trùng lặp (loại trừ bản ghi hiện tại)
+            var isDuplicateUserName = await _context.USERS.AnyAsync(u =>
+
+                u.user_id != userDTO.user_id && u.Username == userDTO.username);
+
+            var isDuplicateEmail = await _context.USERS.AnyAsync(u =>
+
+                u.user_id != userDTO.user_id && u.Email == userDTO.email);
+            if (isDuplicateUserName)
+            {
+                return Ok(new
+                {
+                    message = "Tên đăng nhập đã tồn tại",
+                    success = false
+                });
+            }
+            if (isDuplicateEmail)
+            {
+                return Ok(new
+                {
+                    message = "Email đã tồn tại",
+                    success = false
+                });
+            }
+            //Cập nhật dữ liệu
+            user.full_name = userDTO.full_name;
+            user.Email = userDTO.email;
+            user.Username = userDTO.username;
+            _context.USERS.Update(user);
+            await _context.SaveChangesAsync();
+            return Ok(new
+            {
+                message = "Cập nhật thông tin thành công!",
+                success = true
+            });
         }
 
         // DELETE api/<UsersController>/5
