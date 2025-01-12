@@ -1,6 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 
-namespace DocShareAPI.Helpers
+namespace DocShareAPI.Helpers.PageList
 {
     public static class IQueryableExtensions
     {
