@@ -37,6 +37,10 @@ namespace DocShareAPI.Data
                 .HasKey(f => new { f.follower_id, f.following_id });
 
             // Relationships
+            modelBuilder.Entity<Documents>()
+                .HasOne(dc => dc.Users)
+                .WithMany(d => d.Documents)
+                .HasForeignKey(dc => dc.user_id);
             modelBuilder.Entity<DocumentCategories>()
                 .HasOne(dc => dc.Documents)
                 .WithMany(d => d.DocumentCategories)
