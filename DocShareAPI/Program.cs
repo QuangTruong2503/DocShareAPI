@@ -72,7 +72,10 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowSpecificOrigins", builder =>
     {
-        builder.WithOrigins("http://localhost:3000") // Cho phép các trang web được sử dụng
+        //builder.WithOrigins("http://localhost:3000") // Cho phép các trang web được sử dụng
+        //       .AllowAnyHeader()
+        //       .AllowAnyMethod();
+        builder.AllowAnyOrigin() // Cho phép các trang web được sử dụng
                .AllowAnyHeader()
                .AllowAnyMethod();
     });

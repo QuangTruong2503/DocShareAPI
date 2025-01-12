@@ -88,7 +88,7 @@ namespace DocShareAPI.Controllers
         public async Task<IActionResult> GetMyProfile(Guid userID)
         {
             var user = await _context.USERS.Where(u => u.user_id == userID)
-                .Select(u => new { u.Username , u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified})
+                .Select(u => new { u.user_id, u.Username , u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified})
                 .FirstOrDefaultAsync();
             if (user == null)
             {
