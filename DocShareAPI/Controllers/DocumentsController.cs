@@ -71,6 +71,15 @@ namespace DocShareAPI.Controllers
         [HttpGet("documents")]
         public async Task<IActionResult> GetAllDocuments([FromQuery] PaginationParams paginationParams)
         {
+            var decodedTokenResponse = await DecodeAndValidateToken();
+            if (decodedTokenResponse == null)
+            {
+                return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+            }
+            //else if(decodedTokenResponse.roleID != "admin")
+            //{
+            //    return BadRequest(new { message = "Bạn không đủ quyền xem" });
+            //}
             var query = _context.DOCUMENTS.AsQueryable();
 
             // Sử dụng extension method ToPagedListAsync
@@ -115,10 +124,15 @@ namespace DocShareAPI.Controllers
 
         // POST api/<DocumentsController>
         [HttpPost("upload-document")]
-        public async Task<IActionResult> UploadDocument(IFormFile file, Guid userID)
+        public async Task<IActionResult> UploadDocument(IFormFile file)
         {
             try
             {
+                var decodedTokenResponse = await DecodeAndValidateToken();
+                if (decodedTokenResponse == null)
+                {
+                    return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+                }
                 if (!IsValidDocument(file, out string validationMessage))
                 {
                     _logger.LogWarning(validationMessage);
@@ -147,7 +161,7 @@ namespace DocShareAPI.Controllers
                 Documents newDoc = new Documents
                 {
                     document_id = newID,
-                    user_id = userID,
+                    user_id = decodedTokenResponse.userID,
                     Title = $"{newID}-{ConvertPdf.ConvertPdfTitle(file.FileName)}",
                     file_url = uploadResult.SecureUrl.ToString(),
                     public_id = uploadResult.PublicId,
@@ -184,29 +198,20 @@ namespace DocShareAPI.Controllers
         [HttpDelete("delete-document")]
         public async Task<IActionResult> DeleteDocument(int documentID)
         {
-            // Lấy giá trị của cookie tên "token"
-            if (!Request.Cookies.TryGetValue("token", out string? cookieValue))
-            {
-                return BadRequest(new { message = "Không có dữ liệu token người dùng" });
-            }
-
-            var decodedToken = _tokenServices.DecodeToken(cookieValue);
-            if (decodedToken == null)
-            {
-                return BadRequest(new { message = "Token không hợp lệ" });
-            }
-            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+            var decodedTokenResponse = await DecodeAndValidateToken();
             if (decodedTokenResponse == null)
             {
-                return BadRequest(new { message = "Token không hợp lệ" });
+                return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
             }
 
+            // Lấy tài liệu
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
             if (document == null)
             {
                 return BadRequest(new { message = "Tài liệu không tồn tại" });
             }
 
+            // Kiểm tra quyền sở hữu
             if (document.user_id != decodedTokenResponse.userID)
             {
                 return BadRequest(new { message = "Bạn không phải chủ sở hữu tài liệu" });
@@ -220,9 +225,7 @@ namespace DocShareAPI.Controllers
         }
 
 
-        /// <summary>
-        /// Kiểm tra tính hợp lệ của tài liệu được tải lên.
-        /// </summary>
+        // Kiểm tra tính hợp lệ của tài liệu được tải lên.
         private bool IsValidDocument(IFormFile file, out string validationMessage)
         {
             validationMessage = string.Empty;
@@ -246,6 +249,27 @@ namespace DocShareAPI.Controllers
             }
 
             return true;
+        }
+        
+        //Decode token và trả về Json
+        private async Task<DecodedTokenResponse?> DecodeAndValidateToken()
+        {
+            // Lấy giá trị của cookie tên "token"
+            if ( !Request.Cookies.TryGetValue("token", out string? cookieValue))
+            {
+                return null; // Có thể trả về null hoặc throw exception tùy cách bạn xử lý lỗi
+            }
+
+            // Decode token
+            var decodedToken =  _tokenServices.DecodeToken(cookieValue);
+            if (decodedToken == null)
+            {
+                return null;
+            }
+
+            // Parse JSON và kiểm tra hợp lệ
+            var decodedTokenResponse =  JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+            return decodedTokenResponse;
         }
 
     }
