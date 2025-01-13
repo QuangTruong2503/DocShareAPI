@@ -15,7 +15,6 @@ namespace DocShareAPI.Models
         public required string thumbnail_url { get; set; }
         public int download_count { get; set; } = 0;
         public int like_count { get; set; } = 0;
-        public string Status { get; set; } = "pending";
         public DateTime uploaded_at { get; set; } = DateTime.UtcNow;
         public string? file_type { get; set; }
         public int file_size { get; set; }

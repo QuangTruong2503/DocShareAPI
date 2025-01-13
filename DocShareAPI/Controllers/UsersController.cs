@@ -136,8 +136,7 @@ namespace DocShareAPI.Controllers
             try
             {
                 var user = await _context.USERS
-                .Where(u => u.Email == loginRequest.Email || u.Username == loginRequest.Email)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(u => u.Email == loginRequest.Email || u.Username == loginRequest.Email);
 
                 if (user == null)
                 {
