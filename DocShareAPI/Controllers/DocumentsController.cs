@@ -1,6 +1,7 @@
 ﻿using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
+using DocShareAPI.DataTransferObject;
 using DocShareAPI.Helpers;
 using DocShareAPI.Helpers.PageList;
 using DocShareAPI.Models;
@@ -177,7 +178,8 @@ namespace DocShareAPI.Controllers
                     message = "Tải tài liệu thành công",
                     success = true,
                     newDoc.document_id,
-                    newDoc.Title
+                    newDoc.Title,
+                    newDoc.thumbnail_url
                 });
             }
             catch (Exception ex)
@@ -187,11 +189,45 @@ namespace DocShareAPI.Controllers
             }
         }
 
-
-        // PUT api/<DocumentsController>/5
-        [HttpPut("{id}")]
-        public void Put(int id, [FromBody] string value)
+        //Update title and description
+        [HttpPut("update-title-description")]
+        public async Task<IActionResult> UpdateTitle(DocumentUpdateAfterUploadDTO documents)
         {
+            try
+            {
+                var decodedTokenResponse = await DecodeAndValidateToken();
+                if (decodedTokenResponse == null)
+                {
+                    return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+                }
+                var documemt = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documents.document_id);
+                if (documemt == null)
+                {
+                    return BadRequest(new
+                    {
+                        message = "Tài liệu không tồn tại!"
+                    });
+                }
+                if (documemt.user_id != decodedTokenResponse.userID)
+                {
+                    return BadRequest(new { message = "Bạn không phải người sở hữu tài liệu" });
+                }
+                documemt.Title = documents.title;
+                documemt.Description = documents.description;
+                documemt.is_public = documents.is_public;
+                _context.DOCUMENTS.Update(documemt);
+                await _context.SaveChangesAsync();
+                return Ok(new
+                {
+                    message = "Lưu thông tin thành công!",
+                    success = true,
+                    documemt.document_id
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
         }
 
         // DELETE api/<DocumentsController>/5
@@ -250,27 +286,37 @@ namespace DocShareAPI.Controllers
 
             return true;
         }
-        
+
         //Decode token và trả về Json
         private async Task<DecodedTokenResponse?> DecodeAndValidateToken()
         {
-            // Lấy giá trị của cookie tên "token"
-            if ( !Request.Cookies.TryGetValue("token", out string? cookieValue))
+            // Lấy Authorization header từ Request.Headers
+            if (!Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
             {
-                return null; // Có thể trả về null hoặc throw exception tùy cách bạn xử lý lỗi
+                return null; // Trả về null nếu không có Authorization header
             }
 
+            // Kiểm tra và tách Bearer token
+            const string BearerPrefix = "Bearer ";
+            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return null; // Trả về null nếu không phải Bearer token
+            }
+
+            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
+
             // Decode token
-            var decodedToken =  _tokenServices.DecodeToken(cookieValue);
+            var decodedToken = _tokenServices.DecodeToken(token);
             if (decodedToken == null)
             {
                 return null;
             }
 
             // Parse JSON và kiểm tra hợp lệ
-            var decodedTokenResponse =  JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
             return decodedTokenResponse;
         }
+
 
     }
 }
