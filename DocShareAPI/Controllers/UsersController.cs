@@ -245,7 +245,7 @@ namespace DocShareAPI.Controllers
                     var uploadParams = new ImageUploadParams
                     {
                         File = new FileDescription(image.FileName, stream),
-                        Folder = "DocShare/users",
+                        Folder = $"DocShare/users/{user.Username}",
                         Transformation = new Transformation()
                             .Width(500)
                             .Height(500)
@@ -262,7 +262,7 @@ namespace DocShareAPI.Controllers
                     {
                         message = "Cập nhật ảnh đại diện thành công!",
                         success = true,
-                        user = new { Email = user.Email, FullName = user.full_name, AvatarUrl = user.avatar_url }
+                        user = new { email = user.Email, fullName = user.full_name, avatarUrl = user.avatar_url }
                     });
                 }
             }
@@ -320,7 +320,8 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 message = "Cập nhật thông tin thành công!",
-                success = true
+                success = true,
+                user = new { email = user.Email, fullName = user.full_name, avatarUrl = user.avatar_url }
             });
         }
 

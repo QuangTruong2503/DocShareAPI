@@ -23,7 +23,6 @@ namespace ELearningAPI.Helpers
             };
 
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secretKey));
-            Console.WriteLine("khóa: " + _secretKey);
             var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
             var token = new JwtSecurityToken(

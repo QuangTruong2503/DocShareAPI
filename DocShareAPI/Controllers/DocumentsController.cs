@@ -72,15 +72,6 @@ namespace DocShareAPI.Controllers
         [HttpGet("documents")]
         public async Task<IActionResult> GetAllDocuments([FromQuery] PaginationParams paginationParams)
         {
-            var decodedTokenResponse = await DecodeAndValidateToken();
-            if (decodedTokenResponse == null)
-            {
-                return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
-            }
-            //else if(decodedTokenResponse.roleID != "admin")
-            //{
-            //    return BadRequest(new { message = "Bạn không đủ quyền xem" });
-            //}
             var query = _context.DOCUMENTS.AsQueryable();
 
             // Sử dụng extension method ToPagedListAsync
