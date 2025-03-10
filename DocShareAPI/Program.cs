@@ -50,9 +50,11 @@ if (!string.IsNullOrEmpty(sslCaCert))
     var MySQLUserName = Environment.GetEnvironmentVariable("MYSQL_USER_NAME");
     //Lấy mật khẩu MySQL từ biến môi trường
     var MySQLPassword = Environment.GetEnvironmentVariable("MYSQL_PASSWORD");
+    //Lấy tên database
+    var MySQLDatabase = Environment.GetEnvironmentVariable("MYSQL_DATABASE");
 
     // Cập nhật chuỗi kết nối MySQL với đường dẫn chứng chỉ
-    string connectionString = $"Server={serverName};Port=22588;Database=ELearning;" +
+    string connectionString = $"Server={serverName};Port=22588;Database={MySQLDatabase};" +
         $"User={MySQLUserName};Password={MySQLPassword};SslMode=REQUIRED;SslCa={caCertPath};";
 
     // Cấu hình DbContext với chuỗi kết nối MySQL
@@ -128,5 +130,8 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+app.MapGet("/", () => "Project is running.");
+app.MapGet("/api", () => "Api project is running.");
 
 app.Run();
