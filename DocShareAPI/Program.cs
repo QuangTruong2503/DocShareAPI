@@ -131,7 +131,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-app.MapGet("/", () => "Project is running.");
+app.MapGet("/", () => "DocumentShare project is running.");
 app.MapGet("/api", () => "Api project is running.");
 
 app.Run();
