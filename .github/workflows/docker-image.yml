@@ -17,7 +17,11 @@ jobs:
     # Checkout code từ repository
     - name: Checkout code
       uses: actions/checkout@v3
-
+      
+    - name: List files for debugging
+      run: ls -la
+      working-directory: ./DocShareAPI  # Kiểm tra file trong thư mục DocShareAPI
+      
     # Đăng nhập vào Docker Hub
     - name: Log in to Docker Hub
       uses: docker/login-action@v2
@@ -29,7 +33,8 @@ jobs:
     - name: Build and push Docker image
       uses: docker/build-push-action@v4
       with:
-        context: .  # Thư mục chứa Dockerfile
+        context: ./DocShareAPI  # Thư mục chứa Dockerfile
+        file: ./DocShareAPI/Dockerfile  # Đường dẫn chính xác tới Dockerfile
         push: true  # Push lên Docker Hub
         tags: |
           ${{ secrets.DOCKER_USERNAME }}/documentshareapi:latest
