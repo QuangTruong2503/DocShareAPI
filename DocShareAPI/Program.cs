@@ -98,7 +98,7 @@ builder.Services.AddSwaggerGen(options =>
         Scheme = "Bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Nhập token"
+        Description = "Nhập token đăng nhập"
     });
 
     options.AddSecurityRequirement(new OpenApiSecurityRequirement
