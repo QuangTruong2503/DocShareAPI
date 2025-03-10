@@ -1,6 +1,6 @@
 services:
   docshareapi:
-    image: ${DOCKER_REGISTRY-}docshareapi
+    image: docshareapi:latest
     build:
-      context: .
-      dockerfile: DocShareAPI/Dockerfile
+      context: ./DocShareAPI
+      dockerfile: Dockerfile
