@@ -3,10 +3,10 @@ name: Build and Push Docker Image
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
-      - master
+      - main
 
 jobs:
   build-and-push:
@@ -17,9 +17,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # Cài đặt Docker Buildx để hỗ trợ build image
-    - name: Set up Docker Buildx
+    # Cài đặt Docker
+    - name: Set up Docker
       uses: docker/setup-buildx-action@v2
+
+    # Cài đặt Docker Compose
+    - name: Install Docker Compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
 
     # Đăng nhập vào Docker Hub
     - name: Log in to Docker Hub
