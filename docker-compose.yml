@@ -2,5 +2,5 @@ services:
   docshareapi:
     image: docshareapi:latest
     build:
-      context: ./DocShareAPI
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: DocShareAPI/Dockerfile
