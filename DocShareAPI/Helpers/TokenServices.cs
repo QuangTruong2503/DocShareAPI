@@ -27,7 +27,7 @@ namespace ELearningAPI.Helpers
 
             var token = new JwtSecurityToken(
                 claims: claims,
-                expires: DateTime.Now.AddDays(1),
+                expires: DateTime.Now.AddDays(100),
                 issuer: "DocShare",
                 signingCredentials: creds);
 

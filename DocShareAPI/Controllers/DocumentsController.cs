@@ -115,7 +115,7 @@ namespace DocShareAPI.Controllers
         }
 
         //Lấy dữ liệu các Document đã được tải lên
-        [HttpGet("my-upload-documents")]
+        [HttpGet("my-uploaded-documents")]
         public async Task<IActionResult> GetMyUploadDocuments([FromQuery] PaginationParams paginationParams)
         {
             var decodedTokenResponse = await DecodeAndValidateToken();
@@ -127,13 +127,15 @@ namespace DocShareAPI.Controllers
 
             // Sử dụng extension method ToPagedListAsync
             var pagedData = await query
+                .Where(d => d.user_id == decodedTokenResponse.userID)
                 .Select(d => new
                 {
                     d.document_id,
-                    d.Users.full_name,
                     d.Title,
+                    d.Description,
                     d.thumbnail_url,
                     d.like_count,
+                    d.uploaded_at,
                     d.is_public
                 })
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
