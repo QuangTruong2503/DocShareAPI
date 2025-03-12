@@ -114,6 +114,42 @@ namespace DocShareAPI.Controllers
             return Ok(document);
         }
 
+        //Lấy dữ liệu các Document đã được tải lên
+        [HttpGet("my-upload-documents")]
+        public async Task<IActionResult> GetMyUploadDocuments([FromQuery] PaginationParams paginationParams)
+        {
+            var decodedTokenResponse = await DecodeAndValidateToken();
+            if (decodedTokenResponse == null)
+            {
+                return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+            }
+            var query = _context.DOCUMENTS.AsQueryable();
+
+            // Sử dụng extension method ToPagedListAsync
+            var pagedData = await query
+                .Select(d => new
+                {
+                    d.document_id,
+                    d.Users.full_name,
+                    d.Title,
+                    d.thumbnail_url,
+                    d.like_count,
+                    d.is_public
+                })
+                .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
+            return Ok(new
+            {
+                Data = pagedData,
+                Pagination = new
+                {
+                    pagedData.CurrentPage,
+                    pagedData.PageSize,
+                    pagedData.TotalCount,
+                    pagedData.TotalPages
+                }
+            });
+        }
+
         // POST api/<DocumentsController>
         [HttpPost("upload-document")]
         public async Task<IActionResult> UploadDocument(IFormFile file)

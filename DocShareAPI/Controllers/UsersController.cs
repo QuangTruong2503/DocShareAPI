@@ -6,6 +6,7 @@ using DocShareAPI.Models;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -86,9 +87,17 @@ namespace DocShareAPI.Controllers
         [HttpGet("my-profile")]
         public async Task<IActionResult> GetMyProfile(Guid userID)
         {
+            //Kiểm tra tính hợp lệ của token
+            var decodedTokenResponse = await DecodeAndValidateToken();
+            if (decodedTokenResponse == null)
+            {
+                return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+            }
+
             var user = await _context.USERS.Where(u => u.user_id == userID)
                 .Select(u => new { u.user_id, u.Username , u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified})
                 .FirstOrDefaultAsync();
+            
             if (user == null)
             {
                 return BadRequest(new
@@ -96,6 +105,10 @@ namespace DocShareAPI.Controllers
                     message = "Không tìm thấy dữ liệu người dùng.",
                     success = false
                 });
+            }
+            if (user.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
+            {
+                return BadRequest("Bạn không thể xem hoặc không đủ quyền hạn để xem dữ liệu người dùng này!");
             }
             return Ok(user);
         }
@@ -330,6 +343,33 @@ namespace DocShareAPI.Controllers
         public void Delete(int id)
         {
         }
+        private async Task<DecodedTokenResponse?> DecodeAndValidateToken()
+        {
+            // Lấy Authorization header từ Request.Headers
+            if (!Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
+            {
+                return null; // Trả về null nếu không có Authorization header
+            }
 
+            // Kiểm tra và tách Bearer token
+            const string BearerPrefix = "Bearer ";
+            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return null; // Trả về null nếu không phải Bearer token
+            }
+
+            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
+
+            // Decode token
+            var decodedToken = _tokenServices.DecodeToken(token);
+            if (decodedToken == null)
+            {
+                return null;
+            }
+
+            // Parse JSON và kiểm tra hợp lệ
+            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+            return decodedTokenResponse;
+        }
     }
 }
