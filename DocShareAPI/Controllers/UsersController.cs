@@ -85,7 +85,7 @@ namespace DocShareAPI.Controllers
 
         // GET api/<UsersController>/5
         [HttpGet("my-profile")]
-        public async Task<IActionResult> GetMyProfile(Guid userID)
+        public async Task<IActionResult> GetMyProfile()
         {
             //Kiểm tra tính hợp lệ của token
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
@@ -93,7 +93,7 @@ namespace DocShareAPI.Controllers
             {
                 return Unauthorized(); // Không cần nữa vì middleware đã xử lý
             }
-            var user = await _context.USERS.Where(u => u.user_id == userID)
+            var user = await _context.USERS.Where(u => u.user_id == decodedTokenResponse.userID)
                 .Select(u => new { u.user_id, u.Username , u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified})
                 .FirstOrDefaultAsync();
             
@@ -111,27 +111,6 @@ namespace DocShareAPI.Controllers
             }
             return Ok(user);
         }
-
-        [HttpGet("verify-token/{token}")]
-        public IActionResult CheckToken(string token)
-        {
-            var decode = _tokenServices.DecodeToken(token);
-            if (decode == null)
-            {
-                return Ok(new
-                {
-                    message = "Token không hợp lệ",
-                    success = false,
-                });
-            }
-            return Ok(new
-            {
-                success = true,
-                message = "Token hợp lệ",
-                data = decode
-            });
-        }
-
         //Login
         [HttpPost("request-login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest loginRequest)
