@@ -211,12 +211,18 @@ namespace DocShareAPI.Controllers
 
         //Cập nhật hình ảnh
         [HttpPut("update-image")]
-        public async Task<IActionResult> UpdateImage(IFormFile image, Guid userID)
+        public async Task<IActionResult> UpdateImage(IFormFile image)
         {
+            //Kiểm tra token
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
             try
             {
                 //Tìm userID
-                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userID);
+                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
                 if (user == null)
                 {
                     return BadRequest(new
@@ -268,8 +274,16 @@ namespace DocShareAPI.Controllers
         [HttpPut("update-user")]
         public async Task<IActionResult> UpdateUser([FromBody] UserUpdateDTO userDTO)
         {
+            //Kiểm tra token
+
+            //Kiểm tra token
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userDTO.user_id);
-            var duplicate = await _context.USERS.AnyAsync(u => u.Username == userDTO.username || u.Email == userDTO.email);
+            var duplicate = await _context.USERS.AnyAsync(u => u.Email == userDTO.email);
             if (user == null)
             {
                 return BadRequest(new
@@ -278,22 +292,10 @@ namespace DocShareAPI.Controllers
                     success = false
                 });
             }
-            // Kiểm tra trùng lặp (loại trừ bản ghi hiện tại)
-            var isDuplicateUserName = await _context.USERS.AnyAsync(u =>
-
-                u.user_id != userDTO.user_id && u.Username == userDTO.username);
 
             var isDuplicateEmail = await _context.USERS.AnyAsync(u =>
 
                 u.user_id != userDTO.user_id && u.Email == userDTO.email);
-            if (isDuplicateUserName)
-            {
-                return Ok(new
-                {
-                    message = "Tên đăng nhập đã tồn tại",
-                    success = false
-                });
-            }
             if (isDuplicateEmail)
             {
                 return Ok(new
@@ -305,7 +307,6 @@ namespace DocShareAPI.Controllers
             //Cập nhật dữ liệu
             user.full_name = userDTO.full_name;
             user.Email = userDTO.email;
-            user.Username = userDTO.username;
             _context.USERS.Update(user);
             await _context.SaveChangesAsync();
             return Ok(new
@@ -320,34 +321,6 @@ namespace DocShareAPI.Controllers
         [HttpDelete("{id}")]
         public void Delete(int id)
         {
-        }
-        private async Task<DecodedTokenResponse?> DecodeAndValidateToken()
-        {
-            // Lấy Authorization header từ Request.Headers
-            if (!Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
-            {
-                return null; // Trả về null nếu không có Authorization header
-            }
-
-            // Kiểm tra và tách Bearer token
-            const string BearerPrefix = "Bearer ";
-            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return null; // Trả về null nếu không phải Bearer token
-            }
-
-            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
-
-            // Decode token
-            var decodedToken = _tokenServices.DecodeToken(token);
-            if (decodedToken == null)
-            {
-                return null;
-            }
-
-            // Parse JSON và kiểm tra hợp lệ
-            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
-            return decodedTokenResponse;
         }
     }
 }

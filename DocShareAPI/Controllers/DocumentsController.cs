@@ -8,7 +8,6 @@ using DocShareAPI.Models;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -22,7 +21,6 @@ namespace DocShareAPI.Controllers
         private readonly IConfiguration _configuration;
         private readonly ILogger<DocumentsController> _logger;
         private readonly Cloudinary _cloudinary;
-        private readonly TokenServices _tokenServices;
         private readonly long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5Mb
         private readonly string[] ALLOWED_DOCUMENT_TYPES = {
             "application/pdf",
@@ -34,16 +32,7 @@ namespace DocShareAPI.Controllers
             _logger = logger;
             _context = context;
             _configuration = configuration;
-            //Lấy dữ liệu TokenKey từ biến môi trường
-            string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-            if (string.IsNullOrEmpty(tokenScretKey))
-            {
-                tokenScretKey = _configuration.GetValue<string>("TokenSecretKey");
-            }
-            if (tokenScretKey != null)
-            {
-                _tokenServices = new TokenServices(tokenScretKey);
-            }
+
             try
             {
                 var cloudName = Environment.GetEnvironmentVariable("CLOUDINARY_CLOUD_NAME")
@@ -152,19 +141,19 @@ namespace DocShareAPI.Controllers
             });
         }
 
-        // POST api/<DocumentsController>
         [HttpPost("upload-document")]
         public async Task<IActionResult> UploadDocument(IFormFile file)
         {
             try
             {
-                //Kiểm tra token
+                // Kiểm tra token
                 var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
                 if (decodedTokenResponse == null)
                 {
-                    return Unauthorized(); // Không cần nữa vì middleware đã xử lý
+                    return Unauthorized();
                 }
-                //Kiểm tra tính hợp lệ của tài liệu
+
+                // Kiểm tra tính hợp lệ của tài liệu
                 if (!IsValidDocument(file, out string validationMessage))
                 {
                     _logger.LogWarning(validationMessage);
@@ -185,12 +174,22 @@ namespace DocShareAPI.Controllers
                 };
 
                 var uploadResult = await _cloudinary.UploadAsync(uploadParams);
-                //Tạo ID cho tài liệu đảm bảo không bị trùng trong DB
+
+                // Kiểm tra xem upload có thành công không
+                if (uploadResult == null || uploadResult.Error != null)
+                {
+                    var errorMessage = uploadResult?.Error?.Message ?? "Unknown error during upload";
+                    _logger.LogError($"Cloudinary upload failed: {errorMessage}");
+                    return StatusCode(500, $"Upload to Cloudinary failed: {errorMessage}");
+                }
+
+                // Tạo ID cho tài liệu
                 var newID = GenerateRandomCode.GenerateID();
                 while (await _context.DOCUMENTS.AnyAsync(d => d.document_id == newID))
                 {
                     newID = GenerateRandomCode.GenerateID();
                 }
+
                 Documents newDoc = new Documents
                 {
                     document_id = newID,
@@ -203,8 +202,10 @@ namespace DocShareAPI.Controllers
                     file_type = uploadResult.Format,
                     uploaded_at = DateTime.UtcNow
                 };
+
                 _context.DOCUMENTS.Add(newDoc);
                 await _context.SaveChangesAsync();
+
                 return Ok(new
                 {
                     message = "Tải tài liệu thành công",
