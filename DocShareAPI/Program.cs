@@ -1,4 +1,5 @@
 using DocShareAPI.Data;
+using DocShareAPI.Middleware;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -128,6 +129,8 @@ app.UseCors("AllowSpecificOrigins");
 app.UseHttpsRedirection();
 
 app.UseAuthorization();
+
+app.UseTokenValidation();
 
 app.MapControllers();
 

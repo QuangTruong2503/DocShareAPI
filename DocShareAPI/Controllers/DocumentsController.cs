@@ -38,7 +38,6 @@ namespace DocShareAPI.Controllers
             string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
             if (string.IsNullOrEmpty(tokenScretKey))
             {
-                Console.WriteLine("Không có khóa token được sử dụng trong LoginController");
                 tokenScretKey = _configuration.GetValue<string>("TokenSecretKey");
             }
             if (tokenScretKey != null)
@@ -83,7 +82,8 @@ namespace DocShareAPI.Controllers
                     d.Title,
                     d.thumbnail_url,
                     d.like_count,
-                    d.is_public
+                    d.is_public,
+                    d.public_id
                 })
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
             return Ok(new
@@ -118,10 +118,10 @@ namespace DocShareAPI.Controllers
         [HttpGet("my-uploaded-documents")]
         public async Task<IActionResult> GetMyUploadDocuments([FromQuery] PaginationParams paginationParams)
         {
-            var decodedTokenResponse = await DecodeAndValidateToken();
+            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedTokenResponse == null)
             {
-                return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+                return Unauthorized(); // Không cần nữa vì middleware đã xử lý
             }
             var query = _context.DOCUMENTS.AsQueryable();
 
@@ -158,11 +158,13 @@ namespace DocShareAPI.Controllers
         {
             try
             {
-                var decodedTokenResponse = await DecodeAndValidateToken();
+                //Kiểm tra token
+                var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
                 if (decodedTokenResponse == null)
                 {
-                    return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+                    return Unauthorized(); // Không cần nữa vì middleware đã xử lý
                 }
+                //Kiểm tra tính hợp lệ của tài liệu
                 if (!IsValidDocument(file, out string validationMessage))
                 {
                     _logger.LogWarning(validationMessage);
@@ -183,6 +185,7 @@ namespace DocShareAPI.Controllers
                 };
 
                 var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+                //Tạo ID cho tài liệu đảm bảo không bị trùng trong DB
                 var newID = GenerateRandomCode.GenerateID();
                 while (await _context.DOCUMENTS.AnyAsync(d => d.document_id == newID))
                 {
@@ -224,10 +227,10 @@ namespace DocShareAPI.Controllers
         {
             try
             {
-                var decodedTokenResponse = await DecodeAndValidateToken();
+                var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
                 if (decodedTokenResponse == null)
                 {
-                    return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+                    return Unauthorized(); // Không cần nữa vì middleware đã xử lý
                 }
                 var documemt = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documents.document_id);
                 if (documemt == null)
@@ -263,10 +266,10 @@ namespace DocShareAPI.Controllers
         [HttpDelete("delete-document")]
         public async Task<IActionResult> DeleteDocument(int documentID)
         {
-            var decodedTokenResponse = await DecodeAndValidateToken();
+            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedTokenResponse == null)
             {
-                return BadRequest(new { message = "Token không hợp lệ hoặc không tồn tại" });
+                return Unauthorized(); // Không cần nữa vì middleware đã xử lý
             }
 
             // Lấy tài liệu
@@ -277,16 +280,46 @@ namespace DocShareAPI.Controllers
             }
 
             // Kiểm tra quyền sở hữu
-            if (document.user_id != decodedTokenResponse.userID)
+            if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
             {
-                return BadRequest(new { message = "Bạn không phải chủ sở hữu tài liệu" });
+                return BadRequest(new { message = "Bạn không phải chủ sở hữu tài liệu hoặc admin" });
             }
 
-            return Ok(new
+            try
             {
-                message = $"Xóa thành công: {document.Title}",
-                success = true,
-            });
+                var deleteParams = new DelResParams
+                {
+                    PublicIds = new List<string> { document.public_id },
+                    Type = "upload",
+                    ResourceType = ResourceType.Image
+                };
+
+                var result = await _cloudinary.DeleteResourcesAsync(deleteParams);
+                Console.WriteLine(result.JsonObj);
+                // Kiểm tra kết quả từ Cloudinary
+                if (result.Deleted != null && result.Deleted.ContainsKey(document.public_id))
+                {
+                    // Xóa document khỏi database
+                    _context.DOCUMENTS.Remove(document);
+                    await _context.SaveChangesAsync();
+
+                    return Ok(new
+                    {
+                        message = $"Xóa thành công: {document.Title}",
+                        success = true
+                    });
+                }
+
+                return BadRequest(new { message = "Xóa tài liệu trên Cloudinary thất bại" });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    message = "Lỗi khi xóa tài liệu",
+                    error = ex.Message
+                });
+            }
         }
 
 
@@ -314,37 +347,7 @@ namespace DocShareAPI.Controllers
             }
 
             return true;
-        }
-
-        //Decode token và trả về Json
-        private async Task<DecodedTokenResponse?> DecodeAndValidateToken()
-        {
-            // Lấy Authorization header từ Request.Headers
-            if (!Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
-            {
-                return null; // Trả về null nếu không có Authorization header
-            }
-
-            // Kiểm tra và tách Bearer token
-            const string BearerPrefix = "Bearer ";
-            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return null; // Trả về null nếu không phải Bearer token
-            }
-
-            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
-
-            // Decode token
-            var decodedToken = _tokenServices.DecodeToken(token);
-            if (decodedToken == null)
-            {
-                return null;
-            }
-
-            // Parse JSON và kiểm tra hợp lệ
-            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
-            return decodedTokenResponse;
-        }
+        }        
 
 
     }
