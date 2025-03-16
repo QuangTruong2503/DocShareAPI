@@ -3,6 +3,7 @@ using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,51 +20,16 @@ namespace DocShareAPI.Controllers
         private readonly DocShareDbContext _context;
         //Khai báo dịch vụ token
         private readonly TokenServices _tokenServices;
-        private readonly IConfiguration _configuration;
         //Khai báo CLoudinary
-        private readonly Cloudinary _cloudinary;
         private readonly ILogger<UsersController> _logger;
+        private readonly ICloudinaryService _cloudinaryService;
 
-
-        public UsersController(DocShareDbContext context, IConfiguration configuration, ILogger<UsersController> logger)
+        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices)
         {
             _logger = logger;
             _context = context;
-            _configuration = configuration;
-            //Lấy dữ liệu TokenKey từ biến môi trường
-            string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-            if (string.IsNullOrEmpty(tokenScretKey))
-            {
-                Console.WriteLine("Không có khóa token được sử dụng trong LoginController");
-                tokenScretKey = _configuration.GetValue<string>("TokenSecretKey");
-            }
-            if (tokenScretKey != null)
-            {
-                _tokenServices = new TokenServices(tokenScretKey);
-            }
-            try
-            {
-                var cloudName = Environment.GetEnvironmentVariable("CLOUDINARY_CLOUD_NAME")
-                    ?? configuration["Cloudinary:CloudName"];
-                var apiKey = Environment.GetEnvironmentVariable("CLOUDINARY_API_KEY")
-                    ?? configuration["Cloudinary:ApiKey"];
-                var apiSecret = Environment.GetEnvironmentVariable("CLOUDINARY_API_SECRET")
-                    ?? configuration["Cloudinary:ApiSecret"];
-
-                if (string.IsNullOrEmpty(cloudName) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
-                {
-                    throw new ArgumentNullException("Cloudinary configuration is incomplete");
-                }
-
-                _cloudinary = new Cloudinary(new Account(cloudName, apiKey, apiSecret));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Error initializing Cloudinary: {ex}");
-                throw;
-            }
-
-           
+            _cloudinaryService = cloudinaryService;
+            _tokenServices = tokenServices;
         }
         // GET: api/<UsersController>
         [HttpGet]
@@ -85,7 +51,7 @@ namespace DocShareAPI.Controllers
 
         // GET api/<UsersController>/5
         [HttpGet("my-profile")]
-        public async Task<IActionResult> GetMyProfile(Guid userID)
+        public async Task<IActionResult> GetMyProfile()
         {
             //Kiểm tra tính hợp lệ của token
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
@@ -93,7 +59,7 @@ namespace DocShareAPI.Controllers
             {
                 return Unauthorized(); // Không cần nữa vì middleware đã xử lý
             }
-            var user = await _context.USERS.Where(u => u.user_id == userID)
+            var user = await _context.USERS.Where(u => u.user_id == decodedTokenResponse.userID)
                 .Select(u => new { u.user_id, u.Username , u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified})
                 .FirstOrDefaultAsync();
             
@@ -111,27 +77,6 @@ namespace DocShareAPI.Controllers
             }
             return Ok(user);
         }
-
-        [HttpGet("verify-token/{token}")]
-        public IActionResult CheckToken(string token)
-        {
-            var decode = _tokenServices.DecodeToken(token);
-            if (decode == null)
-            {
-                return Ok(new
-                {
-                    message = "Token không hợp lệ",
-                    success = false,
-                });
-            }
-            return Ok(new
-            {
-                success = true,
-                message = "Token hợp lệ",
-                data = decode
-            });
-        }
-
         //Login
         [HttpPost("request-login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest loginRequest)
@@ -232,12 +177,18 @@ namespace DocShareAPI.Controllers
 
         //Cập nhật hình ảnh
         [HttpPut("update-image")]
-        public async Task<IActionResult> UpdateImage(IFormFile image, Guid userID)
+        public async Task<IActionResult> UpdateImage(IFormFile image)
         {
+            //Kiểm tra token
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
             try
             {
                 //Tìm userID
-                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userID);
+                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
                 if (user == null)
                 {
                     return BadRequest(new
@@ -264,7 +215,7 @@ namespace DocShareAPI.Controllers
                             .Crop("fill")
                     };
 
-                    var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+                    var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
 
                     //Cập nhật hình ảnh
                     user.avatar_url = uploadResult.SecureUrl.ToString();
@@ -289,8 +240,16 @@ namespace DocShareAPI.Controllers
         [HttpPut("update-user")]
         public async Task<IActionResult> UpdateUser([FromBody] UserUpdateDTO userDTO)
         {
+            //Kiểm tra token
+
+            //Kiểm tra token
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userDTO.user_id);
-            var duplicate = await _context.USERS.AnyAsync(u => u.Username == userDTO.username || u.Email == userDTO.email);
+            var duplicate = await _context.USERS.AnyAsync(u => u.Email == userDTO.email);
             if (user == null)
             {
                 return BadRequest(new
@@ -299,22 +258,10 @@ namespace DocShareAPI.Controllers
                     success = false
                 });
             }
-            // Kiểm tra trùng lặp (loại trừ bản ghi hiện tại)
-            var isDuplicateUserName = await _context.USERS.AnyAsync(u =>
-
-                u.user_id != userDTO.user_id && u.Username == userDTO.username);
 
             var isDuplicateEmail = await _context.USERS.AnyAsync(u =>
 
                 u.user_id != userDTO.user_id && u.Email == userDTO.email);
-            if (isDuplicateUserName)
-            {
-                return Ok(new
-                {
-                    message = "Tên đăng nhập đã tồn tại",
-                    success = false
-                });
-            }
             if (isDuplicateEmail)
             {
                 return Ok(new
@@ -326,7 +273,6 @@ namespace DocShareAPI.Controllers
             //Cập nhật dữ liệu
             user.full_name = userDTO.full_name;
             user.Email = userDTO.email;
-            user.Username = userDTO.username;
             _context.USERS.Update(user);
             await _context.SaveChangesAsync();
             return Ok(new
@@ -341,34 +287,6 @@ namespace DocShareAPI.Controllers
         [HttpDelete("{id}")]
         public void Delete(int id)
         {
-        }
-        private async Task<DecodedTokenResponse?> DecodeAndValidateToken()
-        {
-            // Lấy Authorization header từ Request.Headers
-            if (!Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
-            {
-                return null; // Trả về null nếu không có Authorization header
-            }
-
-            // Kiểm tra và tách Bearer token
-            const string BearerPrefix = "Bearer ";
-            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return null; // Trả về null nếu không phải Bearer token
-            }
-
-            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
-
-            // Decode token
-            var decodedToken = _tokenServices.DecodeToken(token);
-            if (decodedToken == null)
-            {
-                return null;
-            }
-
-            // Parse JSON và kiểm tra hợp lệ
-            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
-            return decodedTokenResponse;
         }
     }
 }

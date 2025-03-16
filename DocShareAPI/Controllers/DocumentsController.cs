@@ -5,10 +5,11 @@ using DocShareAPI.DataTransferObject;
 using DocShareAPI.Helpers;
 using DocShareAPI.Helpers.PageList;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
+using System.Diagnostics;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -19,52 +20,22 @@ namespace DocShareAPI.Controllers
     public class DocumentsController : ControllerBase
     {
         private readonly DocShareDbContext _context;
-        private readonly IConfiguration _configuration;
         private readonly ILogger<DocumentsController> _logger;
-        private readonly Cloudinary _cloudinary;
-        private readonly TokenServices _tokenServices;
+        private readonly ICloudinaryService _cloudinaryService;
         private readonly long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5Mb
         private readonly string[] ALLOWED_DOCUMENT_TYPES = {
             "application/pdf",
             "application/msword",
             "text/plain",
         };
-        public DocumentsController(DocShareDbContext context, IConfiguration configuration, ILogger<DocumentsController> logger)
+        public DocumentsController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<DocumentsController> logger)
         {
             _logger = logger;
             _context = context;
-            _configuration = configuration;
-            //Lấy dữ liệu TokenKey từ biến môi trường
-            string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-            if (string.IsNullOrEmpty(tokenScretKey))
-            {
-                tokenScretKey = _configuration.GetValue<string>("TokenSecretKey");
-            }
-            if (tokenScretKey != null)
-            {
-                _tokenServices = new TokenServices(tokenScretKey);
-            }
-            try
-            {
-                var cloudName = Environment.GetEnvironmentVariable("CLOUDINARY_CLOUD_NAME")
-                    ?? configuration["Cloudinary:CloudName"];
-                var apiKey = Environment.GetEnvironmentVariable("CLOUDINARY_API_KEY")
-                    ?? configuration["Cloudinary:ApiKey"];
-                var apiSecret = Environment.GetEnvironmentVariable("CLOUDINARY_API_SECRET")
-                    ?? configuration["Cloudinary:ApiSecret"];
-
-                if (string.IsNullOrEmpty(cloudName) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
-                {
-                    throw new ArgumentNullException("Cloudinary configuration is incomplete");
-                }
-
-                _cloudinary = new Cloudinary(new Account(cloudName, apiKey, apiSecret));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Error initializing Cloudinary: {ex}");
-                throw;
-            }
+            _cloudinaryService = cloudinaryService;
+            var stopwatch = Stopwatch.StartNew();
+            // Đoạn code cần đo
+            _logger.LogInformation($"Thời gian thực thi: {stopwatch.ElapsedMilliseconds}ms");
         }
         
         // GET: api/<DocumentsController>
@@ -72,7 +43,6 @@ namespace DocShareAPI.Controllers
         public async Task<IActionResult> GetAllDocuments([FromQuery] PaginationParams paginationParams)
         {
             var query = _context.DOCUMENTS.AsQueryable();
-
             // Sử dụng extension method ToPagedListAsync
             var pagedData = await query
                 .Select(d => new
@@ -145,26 +115,25 @@ namespace DocShareAPI.Controllers
                 Pagination = new
                 {
                     pagedData.CurrentPage,
-                    pagedData.PageSize,
                     pagedData.TotalCount,
                     pagedData.TotalPages
                 }
             });
         }
 
-        // POST api/<DocumentsController>
         [HttpPost("upload-document")]
         public async Task<IActionResult> UploadDocument(IFormFile file)
         {
             try
             {
-                //Kiểm tra token
+                // Kiểm tra token
                 var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
                 if (decodedTokenResponse == null)
                 {
-                    return Unauthorized(); // Không cần nữa vì middleware đã xử lý
+                    return Unauthorized();
                 }
-                //Kiểm tra tính hợp lệ của tài liệu
+
+                // Kiểm tra tính hợp lệ của tài liệu
                 if (!IsValidDocument(file, out string validationMessage))
                 {
                     _logger.LogWarning(validationMessage);
@@ -184,18 +153,28 @@ namespace DocShareAPI.Controllers
                     Tags = file.ContentType
                 };
 
-                var uploadResult = await _cloudinary.UploadAsync(uploadParams);
-                //Tạo ID cho tài liệu đảm bảo không bị trùng trong DB
+                var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
+
+                // Kiểm tra xem upload có thành công không
+                if (uploadResult == null || uploadResult.Error != null)
+                {
+                    var errorMessage = uploadResult?.Error?.Message ?? "Unknown error during upload";
+                    _logger.LogError($"Cloudinary upload failed: {errorMessage}");
+                    return StatusCode(500, $"Upload to Cloudinary failed: {errorMessage}");
+                }
+
+                // Tạo ID cho tài liệu
                 var newID = GenerateRandomCode.GenerateID();
                 while (await _context.DOCUMENTS.AnyAsync(d => d.document_id == newID))
                 {
                     newID = GenerateRandomCode.GenerateID();
                 }
+
                 Documents newDoc = new Documents
                 {
                     document_id = newID,
                     user_id = decodedTokenResponse.userID,
-                    Title = $"{newID}-{ConvertPdf.ConvertPdfTitle(file.FileName)}",
+                    Title = $"{ConvertPdf.ConvertPdfTitle(file.FileName)}-{newID}",
                     file_url = uploadResult.SecureUrl.ToString(),
                     public_id = uploadResult.PublicId,
                     thumbnail_url = ConvertPdf.ConvertPdfTitleToJpg(uploadResult.SecureUrl.ToString()),
@@ -203,8 +182,10 @@ namespace DocShareAPI.Controllers
                     file_type = uploadResult.Format,
                     uploaded_at = DateTime.UtcNow
                 };
+
                 _context.DOCUMENTS.Add(newDoc);
                 await _context.SaveChangesAsync();
+
                 return Ok(new
                 {
                     message = "Tải tài liệu thành công",
@@ -294,7 +275,7 @@ namespace DocShareAPI.Controllers
                     ResourceType = ResourceType.Image
                 };
 
-                var result = await _cloudinary.DeleteResourcesAsync(deleteParams);
+                var result = await _cloudinaryService.Cloudinary.DeleteResourcesAsync(deleteParams);
                 Console.WriteLine(result.JsonObj);
                 // Kiểm tra kết quả từ Cloudinary
                 if (result.Deleted != null && result.Deleted.ContainsKey(document.public_id))

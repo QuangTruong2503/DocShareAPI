@@ -1,5 +1,6 @@
 using DocShareAPI.Data;
 using DocShareAPI.Middleware;
+using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -10,33 +11,6 @@ using System.Text;
 var builder = WebApplication.CreateBuilder(args);
 
 
-
-//Add Token Service
-//Thêm dịch vụ Token
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    var secretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-    if (!string.IsNullOrEmpty(secretKey))
-    {
-        secretKey = builder.Configuration["TokenSecretKey"];
-    }
-    if (secretKey != null)
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = false,
-            ValidateAudience = false,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
-        };
-    }
-});
 
 // Lấy chứng chỉ SSL từ biến môi trường
 var sslCaCert = Environment.GetEnvironmentVariable("SSL_CA_CERT");
@@ -87,6 +61,7 @@ builder.Services.AddCors(options =>
 
 // Add services to the container.
 builder.Services.AddControllers();
+
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -115,6 +90,36 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
+
+// Lấy secretKey từ biến môi trường hoặc configuration
+var secretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
+    ?? builder.Configuration["TokenSecretKey"]
+    ?? throw new InvalidOperationException("JWT SecretKey is not configured.");
+
+// Đăng ký TokenServices với secretKey
+builder.Services.AddScoped<TokenServices>(_ => new TokenServices(secretKey));
+
+// Thêm dịch vụ xác thực JWT
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = false,
+        ValidateAudience = false,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
+    };
+});
+
+//Thêm dịch vụ Cloudinary
+builder.Services.AddSingleton<ICloudinaryService, CloudinaryService>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.

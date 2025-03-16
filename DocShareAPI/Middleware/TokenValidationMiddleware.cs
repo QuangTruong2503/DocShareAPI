@@ -1,5 +1,5 @@
 ﻿using DocShareAPI.Models;
-using ELearningAPI.Helpers;
+using DocShareAPI.Services;
 using Microsoft.Extensions.Configuration;
 using System.Text.Json;
 
@@ -10,11 +10,18 @@ namespace DocShareAPI.Middleware
         private readonly RequestDelegate _next;
         private readonly TokenServices _tokenServices;
         private readonly IConfiguration _configuration;
+        private readonly string[] _publicPaths; // Danh sách các đường dẫn không cần kiểm tra token
 
         public TokenValidationMiddleware(RequestDelegate next, IConfiguration configuration)
         {
             _next = next;
             _configuration = configuration;
+            _publicPaths = new[]
+        {
+            "/api/Users/request-login",
+            "/api/Users/request-register",
+            "/api/Documents/document/"
+        };
             //Lấy dữ liệu TokenKey từ biến môi trường
             string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
             if (string.IsNullOrEmpty(tokenScretKey))
@@ -29,17 +36,43 @@ namespace DocShareAPI.Middleware
 
         public async Task InvokeAsync(HttpContext context)
         {
-            var decodedToken = await DecodeAndValidateToken(context, _tokenServices);
+            // Kiểm tra nếu request nằm trong danh sách public paths
+            var path = context.Request.Path.Value?.ToLower();
+            if (_publicPaths.Any(p => path.StartsWith(p.ToLower())))
+            {
+                await _next(context); // Bỏ qua kiểm tra token và tiếp tục pipeline
+                return;
+            }
+
+            // Logic kiểm tra token cho các API không public
+            if (!context.Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsync("Missing Authorization header");
+                return;
+            }
+
+            const string BearerPrefix = "Bearer ";
+            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsync("Invalid Authorization header format");
+                return;
+            }
+
+            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
+            var decodedToken = _tokenServices.DecodeToken(token);
 
             if (decodedToken == null)
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await context.Response.WriteAsJsonAsync(new { message = "Token không hợp lệ" });
+                await context.Response.WriteAsync("Invalid token");
                 return;
             }
 
-            // Lưu decoded token vào HttpContext.Items để sử dụng sau
-            context.Items["DecodedToken"] = decodedToken;
+            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+            context.Items["DecodedToken"] = decodedTokenResponse;
+
             await _next(context);
         }
 
