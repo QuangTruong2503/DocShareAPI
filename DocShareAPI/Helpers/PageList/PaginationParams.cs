@@ -5,7 +5,7 @@
         private const int MaxPageSize = 10; // Giới hạn số lượng bản ghi tối đa mỗi trang
         public int PageNumber { get; set; } = 1; // Trang mặc định là 1
 
-        private int _pageSize = 10;
+        private int _pageSize = 8;
         public int PageSize
         {
             get => _pageSize;

@@ -2,6 +2,7 @@
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
+using DocShareAPI.Helpers;
 using DocShareAPI.Models;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
@@ -19,51 +20,16 @@ namespace DocShareAPI.Controllers
         private readonly DocShareDbContext _context;
         //Khai báo dịch vụ token
         private readonly TokenServices _tokenServices;
-        private readonly IConfiguration _configuration;
         //Khai báo CLoudinary
-        private readonly Cloudinary _cloudinary;
         private readonly ILogger<UsersController> _logger;
+        private readonly ICloudinaryService _cloudinaryService;
 
-
-        public UsersController(DocShareDbContext context, IConfiguration configuration, ILogger<UsersController> logger)
+        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices)
         {
             _logger = logger;
             _context = context;
-            _configuration = configuration;
-            //Lấy dữ liệu TokenKey từ biến môi trường
-            string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-            if (string.IsNullOrEmpty(tokenScretKey))
-            {
-                Console.WriteLine("Không có khóa token được sử dụng trong LoginController");
-                tokenScretKey = _configuration.GetValue<string>("TokenSecretKey");
-            }
-            if (tokenScretKey != null)
-            {
-                _tokenServices = new TokenServices(tokenScretKey);
-            }
-            try
-            {
-                var cloudName = Environment.GetEnvironmentVariable("CLOUDINARY_CLOUD_NAME")
-                    ?? configuration["Cloudinary:CloudName"];
-                var apiKey = Environment.GetEnvironmentVariable("CLOUDINARY_API_KEY")
-                    ?? configuration["Cloudinary:ApiKey"];
-                var apiSecret = Environment.GetEnvironmentVariable("CLOUDINARY_API_SECRET")
-                    ?? configuration["Cloudinary:ApiSecret"];
-
-                if (string.IsNullOrEmpty(cloudName) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
-                {
-                    throw new ArgumentNullException("Cloudinary configuration is incomplete");
-                }
-
-                _cloudinary = new Cloudinary(new Account(cloudName, apiKey, apiSecret));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Error initializing Cloudinary: {ex}");
-                throw;
-            }
-
-           
+            _cloudinaryService = cloudinaryService;
+            _tokenServices = tokenServices;
         }
         // GET: api/<UsersController>
         [HttpGet]
@@ -249,7 +215,7 @@ namespace DocShareAPI.Controllers
                             .Crop("fill")
                     };
 
-                    var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+                    var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
 
                     //Cập nhật hình ảnh
                     user.avatar_url = uploadResult.SecureUrl.ToString();
