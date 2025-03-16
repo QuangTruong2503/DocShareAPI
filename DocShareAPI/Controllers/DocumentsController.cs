@@ -69,18 +69,44 @@ namespace DocShareAPI.Controllers
             });
         }
 
-        // GET api/<DocumentsController>/5
+        // Lấy dữ liệu tài liệu thông qua ID
         [HttpGet("document/{documentID}")]
         public async Task<IActionResult> GetDocumentByID(int documentID)
         {
-            var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
+            // Lấy thông tin token từ HttpContext.Items (nếu có)
+            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+
+            // Truy vấn document từ database
+            var document = await _context.DOCUMENTS
+                .Where(d => d.document_id == documentID)
+                .Select(d => new
+                {
+                    d.document_id,
+                    d.user_id,
+                    d.Title,
+                    d.Description,
+                    d.file_url,
+                    d.is_public,
+                    d.like_count,
+                    d.download_count,
+                    d.uploaded_at,
+                    d.Users.full_name
+                })
+                .FirstOrDefaultAsync();
+
+            // Kiểm tra document có tồn tại không
             if (document == null)
             {
-                return BadRequest(new
-                {
-                    message = "Không có dữ liệu Tài liệu"
-                });
+                return NotFound(new { message = "Tài liệu không tồn tại." });
             }
+
+            // Kiểm tra quyền truy cập
+            if (!document.is_public && (decodedTokenResponse == null || decodedTokenResponse.userID != document.user_id))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, "Đây là tài liệu riêng tư!" );
+            }
+
+            // Trả về dữ liệu nếu có quyền
             return Ok(document);
         }
 

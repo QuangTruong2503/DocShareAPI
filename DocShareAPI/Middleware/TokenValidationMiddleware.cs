@@ -17,51 +17,94 @@ namespace DocShareAPI.Middleware
             _next = next;
             _configuration = configuration;
             _publicPaths = new[]
-        {
-            "/api/Users/request-login",
-            "/api/Users/request-register",
-            "/api/Documents/document/"
-        };
-            //Lấy dữ liệu TokenKey từ biến môi trường
-            string? tokenScretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-            if (string.IsNullOrEmpty(tokenScretKey))
             {
-                tokenScretKey = _configuration.GetValue<string>("TokenSecretKey");
-            }
-            if (tokenScretKey != null)
+                "/api/users/request-login",
+                "/api/users/request-register",
+                "/api/documents/document/" // Đường dẫn public, bao gồm /api/documents/document/{documentID}
+            };
+
+            // Lấy dữ liệu TokenKey từ biến môi trường hoặc configuration
+            string? tokenSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
+            if (string.IsNullOrEmpty(tokenSecretKey))
             {
-                _tokenServices = new TokenServices(tokenScretKey);
+                tokenSecretKey = _configuration.GetValue<string>("TokenSecretKey");
             }
+
+            if (tokenSecretKey == null)
+            {
+                throw new InvalidOperationException("TokenSecretKey is not configured.");
+            }
+
+            _tokenServices = new TokenServices(tokenSecretKey);
         }
 
         public async Task InvokeAsync(HttpContext context)
         {
-            // Kiểm tra nếu request nằm trong danh sách public paths
             var path = context.Request.Path.Value?.ToLower();
+            const string BearerPrefix = "Bearer ";
+            string? token = null; // Khai báo biến ở phạm vi chung
+            string? decodedToken = null; // Khai báo biến ở phạm vi chung
+            DecodedTokenResponse? decodedTokenResponse = null; // Khai báo biến ở phạm vi chung
+
+            // Kiểm tra token (nếu có) và lưu vào HttpContext.Items, nhưng không chặn request
+            if (context.Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
+            {
+                string authHeader = authorizationHeader.ToString();
+                if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        token = authHeader.Substring(BearerPrefix.Length).Trim();
+                        decodedToken = _tokenServices.DecodeToken(token);
+                        if (decodedToken != null)
+                        {
+                            decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+                            if (decodedTokenResponse != null)
+                            {
+                                context.Items["DecodedToken"] = decodedTokenResponse;
+                            }
+                        }
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        // Xử lý khi header không đủ dài để cắt
+                    }
+                    catch (JsonException)
+                    {
+                        // Xử lý khi JSON không hợp lệ
+                    }
+                    catch (Exception)
+                    {
+                        // Xử lý lỗi chung từ _tokenServices.DecodeToken
+                    }
+                }
+            }
+
+            // Nếu request nằm trong danh sách public paths, tiếp tục pipeline mà không kiểm tra bắt buộc
             if (_publicPaths.Any(p => path.StartsWith(p.ToLower())))
             {
-                await _next(context); // Bỏ qua kiểm tra token và tiếp tục pipeline
+                await _next(context);
                 return;
             }
 
-            // Logic kiểm tra token cho các API không public
-            if (!context.Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
+            // Logic kiểm tra token bắt buộc cho các API không public
+            if (!context.Request.Headers.TryGetValue("Authorization", out authorizationHeader))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 await context.Response.WriteAsync("Missing Authorization header");
                 return;
             }
 
-            const string BearerPrefix = "Bearer ";
-            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
+            string authHeaderRequired = authorizationHeader.ToString();
+            if (!authHeaderRequired.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 await context.Response.WriteAsync("Invalid Authorization header format");
                 return;
             }
 
-            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
-            var decodedToken = _tokenServices.DecodeToken(token);
+            token = authHeaderRequired.Substring(BearerPrefix.Length).Trim();
+            decodedToken = _tokenServices.DecodeToken(token);
 
             if (decodedToken == null)
             {
@@ -70,34 +113,17 @@ namespace DocShareAPI.Middleware
                 return;
             }
 
-            var decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+            decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
+            if (decodedTokenResponse == null)
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsync("Failed to deserialize token");
+                return;
+            }
+
             context.Items["DecodedToken"] = decodedTokenResponse;
 
             await _next(context);
-        }
-
-        private static async Task<DecodedTokenResponse?> DecodeAndValidateToken(HttpContext context, TokenServices tokenServices)
-        {
-            if (!context.Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
-            {
-                return null;
-            }
-
-            const string BearerPrefix = "Bearer ";
-            if (!authorizationHeader.ToString().StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return null;
-            }
-
-            var token = authorizationHeader.ToString().Substring(BearerPrefix.Length).Trim();
-            var decodedToken = tokenServices.DecodeToken(token);
-
-            if (decodedToken == null)
-            {
-                return null;
-            }
-
-            return JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
         }
     }
 
