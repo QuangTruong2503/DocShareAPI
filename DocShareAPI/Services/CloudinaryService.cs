@@ -1,6 +1,6 @@
 ﻿using CloudinaryDotNet;
 
-namespace DocShareAPI.Helpers
+namespace DocShareAPI.Services
 {
     public interface ICloudinaryService
     {

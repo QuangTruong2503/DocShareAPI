@@ -2,8 +2,8 @@
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
-using DocShareAPI.Helpers;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;

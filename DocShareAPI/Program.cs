@@ -1,7 +1,6 @@
 using DocShareAPI.Data;
-using DocShareAPI.Helpers;
 using DocShareAPI.Middleware;
-using ELearningAPI.Helpers;
+using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
