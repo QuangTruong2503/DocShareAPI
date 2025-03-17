@@ -51,7 +51,6 @@ namespace DocShareAPI.Controllers
                     d.Users.full_name,
                     d.Title,
                     d.thumbnail_url,
-                    d.like_count,
                     d.is_public,
                     d.public_id
                 })
@@ -87,7 +86,6 @@ namespace DocShareAPI.Controllers
                     d.Description,
                     d.file_url,
                     d.is_public,
-                    d.like_count,
                     d.download_count,
                     d.uploaded_at,
                     d.Users.full_name
@@ -130,7 +128,6 @@ namespace DocShareAPI.Controllers
                     d.Title,
                     d.Description,
                     d.thumbnail_url,
-                    d.like_count,
                     d.uploaded_at,
                     d.is_public
                 })
@@ -203,6 +200,7 @@ namespace DocShareAPI.Controllers
                     Title = $"{ConvertPdf.ConvertPdfTitle(file.FileName)}-{newID}",
                     file_url = uploadResult.SecureUrl.ToString(),
                     public_id = uploadResult.PublicId,
+                    asset_id = uploadResult.AssetId,
                     thumbnail_url = ConvertPdf.ConvertPdfTitleToJpg(uploadResult.SecureUrl.ToString()),
                     file_size = Convert.ToInt32(file.Length),
                     file_type = uploadResult.Format,
@@ -329,6 +327,45 @@ namespace DocShareAPI.Controllers
             }
         }
 
+        //Tải xuống tài liệu
+        [HttpGet("download-document/{documentID}")]
+        public async Task<IActionResult> DownloadDocument(int documentID)
+        {
+            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedTokenResponse == null)
+            {
+                return Unauthorized(); // Không cần nữa vì middleware đã xử lý
+            }
+            using (var transaction = await _context.Database.BeginTransactionAsync())
+            {
+                try
+                {
+                    var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
+                    if (document == null)
+                    {
+                        return NotFound($"Không có tài liệu với ID: {documentID}");
+                    }
+
+                    document.download_count++;
+                    _context.DOCUMENTS.Update(document);
+                    await _context.SaveChangesAsync();
+
+                    await transaction.CommitAsync();
+
+                    var downloadURL = $"https://res-console.cloudinary.com/{_cloudinaryService.CloudName}/media_explorer_thumbnails/{document.asset_id}/download";
+                    return Ok(new
+                    {
+                        success = true,
+                        downloadURL = downloadURL
+                    });
+                }
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+                    return BadRequest(ex.Message);
+                }
+            }
+        }
 
         // Kiểm tra tính hợp lệ của tài liệu được tải lên.
         private bool IsValidDocument(IFormFile file, out string validationMessage)
