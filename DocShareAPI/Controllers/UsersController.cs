@@ -258,6 +258,17 @@ namespace DocShareAPI.Controllers
                     success = false
                 });
             }
+            var isDuplicateUserName = await _context.USERS.AnyAsync(u =>
+
+                u.user_id != userDTO.user_id && u.Username == userDTO.Username);
+            if (isDuplicateUserName)
+            {
+                return Ok(new
+                {
+                    message = "UserName đã tồn tại",
+                    success = false
+                });
+            }
 
             var isDuplicateEmail = await _context.USERS.AnyAsync(u =>
 
@@ -273,6 +284,7 @@ namespace DocShareAPI.Controllers
             //Cập nhật dữ liệu
             user.full_name = userDTO.full_name;
             user.Email = userDTO.email;
+            user.Username = userDTO.Username;
             _context.USERS.Update(user);
             await _context.SaveChangesAsync();
             return Ok(new

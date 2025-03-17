@@ -22,7 +22,7 @@ namespace DocShareAPI.Controllers
         private readonly DocShareDbContext _context;
         private readonly ILogger<DocumentsController> _logger;
         private readonly ICloudinaryService _cloudinaryService;
-        private readonly long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5Mb
+        private readonly long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10Mb
         private readonly string[] ALLOWED_DOCUMENT_TYPES = {
             "application/pdf",
             "application/msword",
@@ -161,6 +161,13 @@ namespace DocShareAPI.Controllers
                 {
                     _logger.LogWarning(validationMessage);
                     return BadRequest(validationMessage);
+                }
+
+                //Kiểm tra người dùng xác thực
+                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedTokenResponse.userID);
+                if (user != null && !user.is_verified)
+                {
+                    return StatusCode(403, "Tải lên tài liệu thất bại! Vui lòng xác thực tài khoản của bạn trong phần Cài đặt.");
                 }
 
                 string folder = "DocShare/Documents";
@@ -380,7 +387,7 @@ namespace DocShareAPI.Controllers
 
             if (file.Length > MAX_FILE_SIZE)
             {
-                validationMessage = $"Document size {file.Length} exceeds maximum allowed size of {MAX_FILE_SIZE}.";
+                validationMessage = $"Document size {file.Length} exceeds maximum allowed size of {MAX_FILE_SIZE/1024/1024}MB.";
                 return false;
             }
 
