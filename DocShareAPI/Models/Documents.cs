@@ -18,6 +18,7 @@ namespace DocShareAPI.Models
         public DateTime uploaded_at { get; set; } = DateTime.UtcNow;
         public string? file_type { get; set; }
         public int file_size { get; set; }
+        public required int pages {  get; set; }
         public bool is_public { get; set; } = true;
 
         public Users? Users { get; set; }

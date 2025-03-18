@@ -87,6 +87,8 @@ namespace DocShareAPI.Controllers
                     d.file_url,
                     d.is_public,
                     d.download_count,
+                    d.file_size,
+                    d.file_type,
                     d.uploaded_at,
                     d.Users.full_name
                 })
@@ -99,7 +101,7 @@ namespace DocShareAPI.Controllers
             }
 
             // Kiểm tra quyền truy cập
-            if (!document.is_public && (decodedTokenResponse == null || decodedTokenResponse.userID != document.user_id))
+            if (!document.is_public && (decodedTokenResponse == null || (decodedTokenResponse.userID != document.user_id && decodedTokenResponse.roleID != "admin")))
             {
                 return StatusCode(StatusCodes.Status403Forbidden, "Đây là tài liệu riêng tư!" );
             }
@@ -131,6 +133,7 @@ namespace DocShareAPI.Controllers
                     d.uploaded_at,
                     d.is_public
                 })
+                .OrderBy(d => d.uploaded_at)
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
             return Ok(new
             {
@@ -211,19 +214,20 @@ namespace DocShareAPI.Controllers
                     thumbnail_url = ConvertPdf.ConvertPdfTitleToJpg(uploadResult.SecureUrl.ToString()),
                     file_size = Convert.ToInt32(file.Length),
                     file_type = uploadResult.Format,
+                    pages = uploadResult.Pages,
                     uploaded_at = DateTime.UtcNow
                 };
 
                 _context.DOCUMENTS.Add(newDoc);
                 await _context.SaveChangesAsync();
-
                 return Ok(new
                 {
                     message = "Tải tài liệu thành công",
                     success = true,
                     newDoc.document_id,
                     newDoc.Title,
-                    newDoc.thumbnail_url
+                    newDoc.thumbnail_url,
+                    uploadResult
                 });
             }
             catch (Exception ex)
