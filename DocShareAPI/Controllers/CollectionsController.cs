@@ -1,5 +1,8 @@
 ﻿using DocShareAPI.Data;
+using DocShareAPI.DataTransferObject;
+using DocShareAPI.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -15,36 +18,98 @@ namespace DocShareAPI.Controllers
             _context = context;
         }
 
-        // GET: api/<CollectionsController>
-        [HttpGet]
-        public IEnumerable<string> Get()
-        {
-            return new string[] { "value1", "value2" };
-        }
-
-        // GET api/<CollectionsController>/5
-        [HttpGet("{id}")]
-        public string Get(int id)
-        {
-            return "value";
-        }
-
-        // POST api/<CollectionsController>
+        // 1. Thêm mới một bộ sưu tập
         [HttpPost]
-        public void Post([FromBody] string value)
+        public async Task<IActionResult> CreateCollection([FromBody] CollectionDTO collection)
         {
+            //Kiểm tra token
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            // Gán giá trị mặc định nếu cần
+            var newCollection = new Collections()
+            {
+                Name = collection.Name,
+                Description = collection.Description,
+                created_at = DateTime.UtcNow,
+                is_public = collection.is_public,
+                user_id = decodedToken.userID
+            };
+            _context.COLLECTIONS.Add(newCollection);
+            await _context.SaveChangesAsync();
+
+            return Ok("Tạo bộ sưu tập mới thành công.");
         }
 
-        // PUT api/<CollectionsController>/5
+        // 2. Cập nhật một bộ sưu tập
         [HttpPut("{id}")]
-        public void Put(int id, [FromBody] string value)
+        public async Task<IActionResult> UpdateCollection(int id, [FromBody] Collections updatedCollection)
         {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var collection = await _context.COLLECTIONS.FindAsync(id);
+            if (collection == null)
+            {
+                return NotFound(new { message = $"Collection with ID {id} not found." });
+            }
+
+            // Cập nhật các thuộc tính
+            collection.Name = updatedCollection.Name;
+            collection.Description = updatedCollection.Description;
+            collection.is_public = updatedCollection.is_public;
+
+            _context.COLLECTIONS.Update(collection);
+            await _context.SaveChangesAsync();
+
+            return Ok(collection);
         }
 
-        // DELETE api/<CollectionsController>/5
+        // 3. Xóa một bộ sưu tập
         [HttpDelete("{id}")]
-        public void Delete(int id)
+        public async Task<IActionResult> DeleteCollection(int id)
         {
+            var collection = await _context.COLLECTIONS.FindAsync(id);
+            if (collection == null)
+            {
+                return NotFound(new { message = $"Collection with ID {id} not found." });
+            }
+
+            _context.COLLECTIONS.Remove(collection);
+            await _context.SaveChangesAsync();
+
+            return NoContent(); // 204 - Xóa thành công
+        }
+
+        // 4. Hiển thị danh sách bộ sưu tập theo người dùng
+        [HttpGet("my-collection")]
+        public async Task<IActionResult> GetCollectionsByUser()
+        {
+            //Kiểm tra token
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
+            var collections = await _context.COLLECTIONS
+                .Where(c => c.user_id == decodedToken.userID)
+                .ToListAsync();
+
+            if (collections == null || !collections.Any())
+            {
+                return NotFound(new { message = $"No collections found for user with ID {decodedToken.userID}." });
+            }
+
+            return Ok(collections);
         }
     }
 }
