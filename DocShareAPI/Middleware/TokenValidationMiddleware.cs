@@ -23,7 +23,8 @@ public class TokenValidationMiddleware
         {
             "/api/users/request-login",
             "/api/users/request-register",
-            "/api/documents/document/"
+            "/api/documents/document/",
+            "/api/verification/public/"
         };
 
         string? tokenSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
@@ -75,7 +76,7 @@ public class TokenValidationMiddleware
         }
 
         // Cho phép các public paths đi qua
-        if (_publicPaths.Any(p => path.StartsWith(p.ToLower())))
+        if (path != null && _publicPaths.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
         {
             await _next(context);
             return;
