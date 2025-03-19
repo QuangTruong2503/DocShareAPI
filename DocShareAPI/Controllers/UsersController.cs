@@ -93,39 +93,90 @@ namespace DocShareAPI.Controllers
             try
             {
                 var user = await _context.USERS
-                .FirstOrDefaultAsync(u => u.Email == loginRequest.Email || u.Username == loginRequest.Email);
+                    .FirstOrDefaultAsync(u => u.Email == loginRequest.Email || u.Username == loginRequest.Email);
 
                 if (user == null)
                 {
-                    // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
                     return Ok(new
                     {
                         message = "Tài khoản hoặc email không tồn tại.",
                         isLogin = false
                     });
                 }
-                else if (!PasswordHasher.VerifyPassword(loginRequest.Password, user.password_hash))
+
+                if (!PasswordHasher.VerifyPassword(loginRequest.Password, user.password_hash))
                 {
-                    // Không tiết lộ thông tin cụ thể để tránh kẻ tấn công lợi dụng
                     return Ok(new
                     {
                         message = "Mật khẩu không chính xác.",
                         isLogin = false
                     });
                 }
+
+                // Tạo token
                 var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
+
+                // Thêm token vào bảng Tokens
+                var tokenEntity = new Tokens
+                {
+                    token_id = Guid.NewGuid(),
+                    user_id = user.user_id,
+                    token = token,
+                    type = TokenType.Access,
+                    expires_at = DateTime.UtcNow.AddHours(24),
+                    is_active = true,
+                    created_at = DateTime.UtcNow
+                };
+
+                try
+                {
+                    _context.TOKENS.Add(tokenEntity);
+                    await _context.SaveChangesAsync();
+                }
+                catch (DbUpdateException dbEx)
+                {
+                    // Xử lý lỗi cụ thể từ database
+                    var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
+                    return StatusCode(500, new
+                    {
+                        message = "Lỗi khi lưu token vào database",
+                        error = innerException,
+                        success = false
+                    });
+                }
+                catch (Exception ex)
+                {
+                    // Xử lý các lỗi khác liên quan đến database
+                    return StatusCode(500, new
+                    {
+                        message = "Lỗi không xác định khi lưu token",
+                        error = ex.Message,
+                        success = false
+                    });
+                }
 
                 return Ok(new
                 {
                     message = "Đăng nhập thành công!",
                     success = true,
                     token,
-                    user = new {Email = user.Email, FullName = user.full_name, AvatarUrl = user.avatar_url}
+                    user = new
+                    {
+                        Email = user.Email,
+                        FullName = user.full_name,
+                        AvatarUrl = user.avatar_url
+                    }
                 });
             }
             catch (Exception ex)
             {
-                return BadRequest(ex.Message);
+                // Lỗi ngoài quá trình lưu database
+                return StatusCode(500, new
+                {
+                    message = "Lỗi trong quá trình đăng nhập",
+                    error = ex.Message,
+                    success = false
+                });
             }
         }
 

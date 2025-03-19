@@ -20,7 +20,7 @@ namespace DocShareAPI.Data
         public DbSet<CollectionDocuments> COLLECTION_DOCUMENTS { get; set; }
         public DbSet<Follows> FOLLOWS { get; set; }
         public DbSet<Reports> REPORTS { get; set; }
-
+        public DbSet<Tokens> TOKENS { get; set; }
         public DbSet<Likes> LIKES { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -33,6 +33,24 @@ namespace DocShareAPI.Data
             modelBuilder.Entity<Likes>()
                 .Property(l => l.like_id)
                 .ValueGeneratedOnAdd();
+
+            modelBuilder.Entity<Likes>()
+                .HasOne(l => l.Users)
+                .WithMany(u => u.Likes)
+                .HasForeignKey(l => l.user_id);
+
+            modelBuilder.Entity<Likes>()
+                .HasOne(l => l.Documents)
+                .WithMany(u => u.Likes)
+                .HasForeignKey(l => l.document_id);
+
+            modelBuilder.Entity<Tokens>()
+                .HasOne(t => t.Users)
+                .WithMany(u => u.Tokens)
+                .HasForeignKey(t => t.user_id);
+            modelBuilder.Entity<Tokens>()
+                .Property(t => t.type)
+                .HasConversion<string>();
 
             // Cấu hình mối quan hệ Collections -> Users
             modelBuilder.Entity<Collections>()

@@ -26,6 +26,7 @@ namespace DocShareAPI.Models
         public ICollection<DocumentTags>? DocumentTags { get; set; }
         public ICollection<Comments>? Comments { get; set; }
         public ICollection<CollectionDocuments>? CollectionDocuments { get; set; }
+        public ICollection<Likes>? Likes { get; set; }
     }
 
 }

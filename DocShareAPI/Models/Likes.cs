@@ -10,7 +10,7 @@ namespace DocShareAPI.Models
         public int document_id { get; set; }
         public DateTime like_at { get; set; }
 
-        public ICollection<Users>? Users { get; set; }
-        public ICollection<Documents>? Documents { get; set; }
+        public Users? Users { get; set; }
+        public Documents? Documents { get; set; }
     }
 }

@@ -1,5 +1,4 @@
 using DocShareAPI.Data;
-using DocShareAPI.Middleware;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
