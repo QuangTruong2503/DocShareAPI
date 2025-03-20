@@ -5,7 +5,7 @@ namespace DocShareAPI.Models
     public class Collections
     {
         [Key]
-        public int collection_id { get; set; }
+        public int collection_id { get; set; } 
         public Guid user_id { get; set; }
         public required string Name { get; set; }
         public string? Description { get; set; }

@@ -5,10 +5,12 @@ namespace DocShareAPI.Services
     public interface ICloudinaryService
     {
         Cloudinary Cloudinary { get; }
+        string CloudName { get; }
     }
     public class CloudinaryService : ICloudinaryService
     {
         public Cloudinary Cloudinary { get; }
+        public string CloudName { get; }
         public CloudinaryService(IConfiguration configuration, ILogger<CloudinaryService> logger)
         {
             try
@@ -26,6 +28,7 @@ namespace DocShareAPI.Services
                 }
 
                 Cloudinary = new Cloudinary(new Account(cloudName, apiKey, apiSecret));
+                CloudName = cloudName;
             }
             catch (Exception ex)
             {

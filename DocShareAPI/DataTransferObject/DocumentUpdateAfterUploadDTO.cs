@@ -6,7 +6,7 @@
 
         public required string title { get; set; }
 
-        public required string description { get; set; }
+        public  string? description { get; set; }
 
         public required bool is_public { get; set; }
     }

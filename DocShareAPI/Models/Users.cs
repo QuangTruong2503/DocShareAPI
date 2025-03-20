@@ -17,6 +17,8 @@ namespace DocShareAPI.Models
         public string Role { get; set; } = "user";
         public bool is_verified { get; set; } = false;
 
+        public ICollection<Tokens>? Tokens { get; set; }
+        public ICollection<Likes>? Likes { get; set; }
         public ICollection<Documents>? Documents { get; set; }
         public ICollection<Comments>? Comments { get; set; }
         public ICollection<Collections>? Collections { get; set; }
