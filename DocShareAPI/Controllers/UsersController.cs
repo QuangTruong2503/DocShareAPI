@@ -273,31 +273,39 @@ namespace DocShareAPI.Controllers
                     _logger.LogWarning("Image upload attempted with null or empty image");
                     return BadRequest("No image uploaded or image is empty");
                 }
-
                 using (var stream = image.OpenReadStream())
                 {
-                    var uploadParams = new ImageUploadParams
+                    try
                     {
-                        File = new FileDescription(image.FileName, stream),
-                        Folder = $"DocShare/users/{user.Username}",
-                        Transformation = new Transformation()
-                            .Width(500)
-                            .Height(500)
+                        
+                        var uploadParams = new ImageUploadParams
+                        {
+                            File = new FileDescription(image.FileName, stream),
+                            Folder = $"DocShare/users/{user.Username}",
+                            Transformation = new Transformation()
+                            .Width(300)
+                            .Height(300)
                             .Crop("fill")
-                    };
+                        };
 
-                    var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
+                        var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
 
-                    //Cập nhật hình ảnh
-                    user.avatar_url = uploadResult.SecureUrl.ToString();
-                    _context.USERS.Update(user);
-                    await _context.SaveChangesAsync();
-                    return Ok(new
+                        //Cập nhật hình ảnh
+                        user.avatar_url = uploadResult.SecureUrl.ToString();
+                        _context.USERS.Update(user);
+                        await _context.SaveChangesAsync();
+                        return Ok(new
+                        {
+                            message = "Cập nhật ảnh đại diện thành công!",
+                            success = true,
+                            user = new { email = user.Email, fullName = user.full_name, avatarUrl = user.avatar_url }
+                        });
+                    }
+                    catch (Exception ex)
                     {
-                        message = "Cập nhật ảnh đại diện thành công!",
-                        success = true,
-                        user = new { email = user.Email, fullName = user.full_name, avatarUrl = user.avatar_url }
-                    });
+                        return StatusCode(500, $"Lỗi khi lấy assetId: {ex.Message}");
+                    }
+                    
                 }
             }
             catch (Exception ex)

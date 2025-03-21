@@ -65,7 +65,7 @@ namespace DocShareAPI.EmailServices
                 <head>
                     <style>
                         .container {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px; }}
-                        .button {{ background-color: #5ac8fa; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
+                        .button {{ background-color: #5ac8fa; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
                         .footer {{ font-size: 12px; color: #666; margin-top: 20px; }}
                     </style>
                 </head>
@@ -79,7 +79,7 @@ namespace DocShareAPI.EmailServices
                         <p>{verificationLink}</p>
                         <div class='footer'>
                             <p>Đây là email tự động, vui lòng không trả lời.</p>
-                            <p>© 2025 Your App Name</p>
+                            <p>© 2025 DocShare</p>
                         </div>
                     </div>
                 </body>

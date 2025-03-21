@@ -22,7 +22,7 @@ namespace DocShareAPI.Controllers
             _verifyEmailService = verifyEmailService;
         }
 
-        [HttpPost("public/generate-verify-email-token")]
+        [HttpPost("generate-verify-email-token")]
         public async Task<ActionResult> GenerateVerificationToken([FromBody] string email)
         {
             if (string.IsNullOrEmpty(email))
