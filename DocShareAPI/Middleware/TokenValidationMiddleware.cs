@@ -21,8 +21,7 @@ public class TokenValidationMiddleware
         _scopeFactory = scopeFactory;
         _publicPaths = new[]
         {
-            "/api/users/request-login",
-            "/api/users/request-register",
+            "/api/users/public/",
             "/api/documents/document/",
             "/api/verification/public/"
         };

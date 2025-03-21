@@ -26,7 +26,7 @@ namespace DocShareAPI.Services
 
             var token = new JwtSecurityToken(
                 claims: claims,
-                expires: DateTime.Now.AddDays(1),
+                expires: DateTime.Now.AddDays(3),
                 issuer: "DocShare",
                 signingCredentials: creds);
 

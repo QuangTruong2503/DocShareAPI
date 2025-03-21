@@ -4,7 +4,8 @@ using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
-using System.Text;
+using PostmarkDotNet;
+using DocShareAPI.EmailServices;
 
 namespace DocShareAPI.Controllers
 {
@@ -13,19 +14,22 @@ namespace DocShareAPI.Controllers
     public class VerificationController : ControllerBase
     {
         private readonly DocShareDbContext _context;
-        private readonly TokenServices _tokenServices;
-        private readonly ILogger<VerificationController> _logger;
+        private readonly VerifyEmailService _verifyEmailService;
 
-        public VerificationController(DocShareDbContext context, TokenServices tokenServices, ILogger<VerificationController> logger)
+        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService)
         {
             _context = context;
-            _tokenServices = tokenServices;
-            _logger = logger;
+            _verifyEmailService = verifyEmailService;
         }
 
         [HttpPost("public/generate-verify-email-token")]
         public async Task<ActionResult> GenerateVerificationToken([FromBody] string email)
         {
+            if (string.IsNullOrEmpty(email))
+            {
+                return BadRequest(new { message = "Email is required." });
+            }
+
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == email);
             if (user == null)
             {
@@ -34,9 +38,10 @@ namespace DocShareAPI.Controllers
 
             if (user.is_verified)
             {
-                return BadRequest(new { message = "Người dùng đã xác thực." });
+                return BadRequest(new { message = "Email của bạn được đã xác thực." });
             }
 
+            // Xóa token cũ nếu tồn tại
             var existingToken = await _context.TOKENS
                 .Where(t => t.user_id == user.user_id && t.type == TokenType.EmailVerification)
                 .FirstOrDefaultAsync();
@@ -47,6 +52,7 @@ namespace DocShareAPI.Controllers
                 await _context.SaveChangesAsync();
             }
 
+            // Tạo token mới
             var token = GenerateRandomToken();
             var tokenRecord = new Tokens
             {
@@ -61,10 +67,27 @@ namespace DocShareAPI.Controllers
             _context.TOKENS.Add(tokenRecord);
             await _context.SaveChangesAsync();
 
-            // Here you would send the token to the user's email address
-            // For example: await _emailService.SendVerificationEmail(user.Email, token);
-
-            return Ok(new {token});
+            // Gửi email xác thực
+            try
+            {
+                await _verifyEmailService.SendVerificationEmailAsync(
+                    toEmail: user.Email,
+                    recipientName: user.full_name ?? "Người dùng", // Giả sử có field Name, nếu không thì thay bằng giá trị mặc định
+                    verificationToken: token
+                );
+                return Ok(new 
+                { 
+                    message = $"Mã xác thực đã được gửi đến email của bạn. Vui lòng kiểm tra 'Thư Mục Rác' nếu không nhận được email ", 
+                    token 
+                });
+            }
+            catch (Exception ex)
+            {
+                // Có thể rollback token nếu gửi email thất bại
+                _context.TOKENS.Remove(tokenRecord);
+                await _context.SaveChangesAsync();
+                return StatusCode(500, new { message = "Error sending verification email", error = ex.Message });
+            }
         }
 
         //Xác thực token verify email
