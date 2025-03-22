@@ -15,9 +15,15 @@ namespace DocShareAPI.EmailServices
 
         public async Task SendEmailAsync(string toEmail, string subject, string body)
         {
+            var fromEmail = _configuration["EmailSettings:FromEmail"];
+            if (string.IsNullOrEmpty(fromEmail))
+            {
+                throw new ArgumentNullException(nameof(fromEmail), "From email address cannot be null or empty.");
+            }
+
             var mailMessage = new MailMessage
             {
-                From = new MailAddress(_configuration["EmailSettings:FromEmail"], "Your App Name"),
+                From = new MailAddress(fromEmail, "DocShare"),
                 Subject = subject,
                 Body = body,
                 IsBodyHtml = true
@@ -32,7 +38,7 @@ namespace DocShareAPI.EmailServices
                 DeliveryMethod = SmtpDeliveryMethod.Network,
                 UseDefaultCredentials = false,
                 Credentials = new System.Net.NetworkCredential(
-                    _configuration["EmailSettings:FromEmail"],
+                    fromEmail,
                     _configuration["EmailSettings:AppPassword"])
             };
 
@@ -41,7 +47,8 @@ namespace DocShareAPI.EmailServices
 
         public async Task SendResetPasswordEmailAsync(string toEmail, string recipientName, string resetToken)
         {
-            string resetLink = $"https://yourdomain.com/reset-password?token={resetToken}";
+            var domain = _configuration["DOMAIN"];
+            string resetLink = $"{domain}/reset-password/{resetToken}";
             string emailBody = GetResetPasswordEmailTemplate(recipientName, resetLink);
             await SendEmailAsync(toEmail, "Đặt lại mật khẩu của bạn", emailBody);
         }
@@ -64,6 +71,7 @@ namespace DocShareAPI.EmailServices
                         <p>Xin chào {recipientName},</p>
                         <p>Chúng tôi nhận được yêu cầu đặt lại mật khẩu. Nhấp vào nút dưới đây để tiếp tục:</p>
                         <p><a href='{resetLink}' class='button'>Đặt lại mật khẩu</a></p>
+                        <strong>Hết hạn sau 3 phút</strong>
                         <p>Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này.</p>
                         <p>Link: {resetLink}</p>
                         <div class='footer'>
