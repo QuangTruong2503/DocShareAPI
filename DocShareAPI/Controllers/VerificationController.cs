@@ -21,7 +21,18 @@ namespace DocShareAPI.Controllers
             _context = context;
             _verifyEmailService = verifyEmailService;
         }
-
+        //Kiểm tra người dùng đã xác thực
+        [HttpGet("check-user-verified")]
+        public async Task<IActionResult> CheckUserIsVerify()
+        {
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
+            var is_verified = await _context.USERS.Where(u => u.user_id == decodedToken.userID).Select(u => u.is_verified).FirstOrDefaultAsync();
+            return Ok(new { is_verified });
+        }
         [HttpPost("generate-verify-email-token")]
         public async Task<ActionResult> GenerateVerificationToken([FromBody] string email)
         {

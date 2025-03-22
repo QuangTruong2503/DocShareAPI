@@ -93,7 +93,7 @@ namespace DocShareAPI.Controllers
 
             if (!document.is_public && (decodedTokenResponse == null || (decodedTokenResponse.userID != document.user_id && decodedTokenResponse.roleID != "admin")))
             {
-                return Forbid("This is a private document!");
+                return NotFound("Đây là tài liệu riêng tư!");
             }
 
             return Ok(document);
