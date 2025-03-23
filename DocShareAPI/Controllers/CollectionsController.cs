@@ -120,8 +120,18 @@ namespace DocShareAPI.Controllers
                 return Unauthorized();
             }
             var collections = await _context.COLLECTIONS
+                .Include(c => c.CollectionDocuments)
                 .Where(c => c.user_id == decodedToken.userID)
-                .ToListAsync();
+                .Select(c => new
+                {
+                    c.user_id,
+                    c.collection_id,
+                    c.Name,
+                    c.Description,
+                    c.is_public,
+                    c.created_at,
+                    DocumentCount = c.CollectionDocuments != null ? c.CollectionDocuments.Count(cd => cd.collection_id == c.collection_id) : 0
+                }).ToListAsync();
 
             if (collections == null || !collections.Any())
             {

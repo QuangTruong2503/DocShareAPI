@@ -1,4 +1,5 @@
 using DocShareAPI.Data;
+using DocShareAPI.EmailServices;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -18,31 +19,34 @@ if (!string.IsNullOrEmpty(sslCaCert))
     // Tạo file tạm thời chứa nội dung chứng chỉ
     var caCertPath = "/tmp/ca.pem";  // Đường dẫn tạm thời
     System.IO.File.WriteAllText(caCertPath, sslCaCert);
-    //Lấy tên máy chủ MySQL từ biến môi trường
-    var serverName = Environment.GetEnvironmentVariable("MYSQL_SERVER_NAME");
-    //Lấy tên tài khoản MySQL từ biến môi trường
-    var MySQLUserName = Environment.GetEnvironmentVariable("MYSQL_USER_NAME");
-    //Lấy mật khẩu MySQL từ biến môi trường
-    var MySQLPassword = Environment.GetEnvironmentVariable("MYSQL_PASSWORD");
-    //Lấy tên database
-    var MySQLDatabase = Environment.GetEnvironmentVariable("MYSQL_DATABASE");
 
-    // Cập nhật chuỗi kết nối MySQL với đường dẫn chứng chỉ
-    string connectionString = $"Server={serverName};Port=22588;Database={MySQLDatabase};" +
-        $"User={MySQLUserName};Password={MySQLPassword};SslMode=REQUIRED;SslCa={caCertPath};";
+    // Lấy chuỗi kết nối MySQL từ biến môi trường
+    string? connectionString = Environment.GetEnvironmentVariable("MYSQL_CONNECTION");
+    if (string.IsNullOrEmpty(connectionString))
+    {
+        throw new InvalidOperationException("MYSQL_CONNECTION environment variable is not set.");
+    }
+
+    // Cấu hình DbContext với chuỗi kết nối MySQL và SSL
+    builder.Services.AddDbContext<DocShareDbContext>(options =>
+        options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29)),
+            mySqlOptions => mySqlOptions.EnableRetryOnFailure()
+        ));
+}
+else
+{
+    // Lấy chuỗi kết nối MySQL từ appsettings.json
+    string? connectionString = builder.Configuration.GetConnectionString("MysqlConnection");
+    if (string.IsNullOrEmpty(connectionString))
+    {
+        throw new InvalidOperationException("MysqlConnection is not configured in appsettings.json.");
+    }
 
     // Cấu hình DbContext với chuỗi kết nối MySQL
     builder.Services.AddDbContext<DocShareDbContext>(options =>
-        options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+        options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29))));
 }
 
-// Đăng ký dịch vụ DbContext với MySQL. Sử dụng ở local
-else
-{
-    builder.Services.AddDbContext<DocShareDbContext>(options =>
-    options.UseMySql(builder.Configuration.GetConnectionString("MysqlConnection"),
-        new MySqlServerVersion(new Version(8, 0, 29))));
-}
 
 // Thêm CORS vào dịch vụ
 builder.Services.AddCors(options =>
@@ -61,7 +65,7 @@ builder.Services.AddCors(options =>
 // Add services to the container.
 builder.Services.AddControllers();
 
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+// Learn more about configuring Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -118,6 +122,12 @@ builder.Services.AddAuthentication(options =>
 
 //Thêm dịch vụ Cloudinary
 builder.Services.AddSingleton<ICloudinaryService, CloudinaryService>();
+//Gmail
+builder.Services.AddScoped<VerifyEmailService>();
+builder.Services.AddScoped<ResetPasswordEmailService>();
+
+// Add services Http to the container.
+builder.Services.AddHttpClient(); // Register HttpClient
 
 var app = builder.Build();
 
