@@ -39,7 +39,7 @@ namespace DocShareAPI.EmailServices
                 UseDefaultCredentials = false,
                 Credentials = new System.Net.NetworkCredential(
                     fromEmail,
-                    _configuration["EmailSettings:AppPassword"])
+                    appPassword)
             };
 
             await smtp.SendMailAsync(mailMessage);
