@@ -15,7 +15,7 @@ namespace DocShareAPI.EmailServices
 
         public async Task SendEmailAsync(string toEmail, string subject, string body)
         {
-            var fromEmail = Environment.GetEnvironmentVariable("FromEmail") ?? _configuration["EmailSettings:FromEmail"];
+            var fromEmail = Environment.GetEnvironmentVariable("EMAIL_SETTING_FROM_EMAIL") ?? _configuration["EmailSettings:FromEmail"];
             if (string.IsNullOrEmpty(fromEmail))
             {
                 throw new ArgumentNullException(nameof(fromEmail), "From email address cannot be null or empty.");
@@ -29,7 +29,7 @@ namespace DocShareAPI.EmailServices
                 IsBodyHtml = true
             };
             mailMessage.To.Add(toEmail);
-
+            var appPassword = Environment.GetEnvironmentVariable("EMAIL_SETTING_APP_PASSWORD") ?? _configuration["EmailSettings:AppPassword"];
             using var smtp = new System.Net.Mail.SmtpClient
             {
                 Host = "smtp.gmail.com",
@@ -48,7 +48,8 @@ namespace DocShareAPI.EmailServices
 
         public async Task SendVerificationEmailAsync(string toEmail, string recipientName, string verificationToken)
         {
-            var domain = _configuration["DOMAIN"]; if (string.IsNullOrEmpty(domain))
+            var domain = _configuration["DOMAIN"] ?? Environment.GetEnvironmentVariable("DOMAIN"); 
+            if (string.IsNullOrEmpty(domain))
             {
                 domain = Environment.GetEnvironmentVariable("DOMAIN");
             }

@@ -15,7 +15,8 @@ namespace DocShareAPI.EmailServices
 
         public async Task SendEmailAsync(string toEmail, string subject, string body)
         {
-            var fromEmail = _configuration["EmailSettings:FromEmail"];
+            //lấy email từ appsettings.json hoặc biến môi trường
+            var fromEmail = _configuration["EmailSettings:FromEmail"] ?? Environment.GetEnvironmentVariable("EMAIL_SETTING_FROM_EMAIL");
             if (string.IsNullOrEmpty(fromEmail))
             {
                 throw new ArgumentNullException(nameof(fromEmail), "From email address cannot be null or empty.");
@@ -29,7 +30,7 @@ namespace DocShareAPI.EmailServices
                 IsBodyHtml = true
             };
             mailMessage.To.Add(toEmail);
-
+            var appPassword = _configuration["EmailSettings:AppPassword"] ?? Environment.GetEnvironmentVariable("EMAIL_SETTING_APP_PASSWORD");
             using var smtp = new System.Net.Mail.SmtpClient
             {
                 Host = "smtp.gmail.com",
@@ -39,7 +40,7 @@ namespace DocShareAPI.EmailServices
                 UseDefaultCredentials = false,
                 Credentials = new System.Net.NetworkCredential(
                     fromEmail,
-                    _configuration["EmailSettings:AppPassword"])
+                    appPassword)
             };
 
             await smtp.SendMailAsync(mailMessage);
@@ -47,7 +48,7 @@ namespace DocShareAPI.EmailServices
 
         public async Task SendResetPasswordEmailAsync(string toEmail, string recipientName, string resetToken)
         {
-            var domain = _configuration["DOMAIN"];
+            var domain = _configuration["DOMAIN"] ?? Environment.GetEnvironmentVariable("DOMAIN");
             string resetLink = $"{domain}/reset-password/{resetToken}";
             string emailBody = GetResetPasswordEmailTemplate(recipientName, resetLink);
             await SendEmailAsync(toEmail, "Đặt lại mật khẩu của bạn", emailBody);
