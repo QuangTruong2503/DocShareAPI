@@ -57,8 +57,8 @@ namespace DocShareAPI.Data
                 .HasOne(c => c.Users)              // Navigation property
                 .WithMany(u => u.Collections)      // Quan hệ 1-n với Collections trong Users
                 .HasForeignKey(c => c.user_id);    // Khóa ngoại là user_id
-
-            // Các mối quan hệ khác đã có:
+                
+            //Document - User
             modelBuilder.Entity<Documents>()
                 .HasOne(dc => dc.Users)
                 .WithMany(d => d.Documents)
@@ -66,12 +66,12 @@ namespace DocShareAPI.Data
 
             modelBuilder.Entity<DocumentCategories>()
                 .HasKey(dc => new { dc.document_id, dc.category_id });
-
+            //Document - Category
             modelBuilder.Entity<DocumentCategories>()
                 .HasOne(dc => dc.Documents)
                 .WithMany(d => d.DocumentCategories)
                 .HasForeignKey(dc => dc.document_id);
-
+            //Category - Document
             modelBuilder.Entity<DocumentCategories>()
                 .HasOne(dc => dc.Categories)
                 .WithMany(c => c.DocumentCategories)

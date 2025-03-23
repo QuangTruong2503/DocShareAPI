@@ -6,11 +6,9 @@ using DocShareAPI.Helpers;
 using DocShareAPI.Helpers.PageList;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
-using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using System.Diagnostics;
+
 
 namespace DocShareAPI.Controllers
 {
@@ -67,6 +65,10 @@ namespace DocShareAPI.Controllers
         public async Task<ActionResult> GetDocumentByID(int documentID)
         {
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedTokenResponse == null)
+            {
+                return Unauthorized();
+            }
 
             var document = await _context.DOCUMENTS
                 .Where(d => d.document_id == documentID)
@@ -91,7 +93,7 @@ namespace DocShareAPI.Controllers
                 return NotFound(new { message = "Document not found." });
             }
 
-            if (!document.is_public && (decodedTokenResponse == null || (decodedTokenResponse.userID != document.user_id && decodedTokenResponse.roleID != "admin")))
+            if (!document.is_public && (decodedTokenResponse.userID != document.user_id && decodedTokenResponse.roleID != "admin"))
             {
                 return NotFound("Đây là tài liệu riêng tư!");
             }
@@ -100,7 +102,11 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpGet("my-uploaded-documents")]
-        public async Task<ActionResult> GetMyUploadDocuments([FromQuery] PaginationParams paginationParams)
+        public async Task<ActionResult> GetMyUploadDocuments(
+            [FromQuery] PaginationParams paginationParams,
+            [FromQuery] string sortBy = "date",
+            [FromQuery] bool? isPublic = null
+            )
         {
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedTokenResponse == null)
@@ -108,9 +114,20 @@ namespace DocShareAPI.Controllers
                 return Unauthorized();
             }
 
-            var query = _context.DOCUMENTS.AsQueryable();
-            var pagedData = await query
-                .Where(d => d.user_id == decodedTokenResponse.userID)
+            var query = _context.DOCUMENTS.AsQueryable()
+                .Where(d => d.user_id == decodedTokenResponse.userID);
+            if (isPublic != null)
+            {
+                query = query.Where(d => d.is_public == isPublic);
+            }
+            // Apply sorting
+            query = (sortBy.ToLower()) switch
+            {
+                ("date") => query.OrderBy(d => d.uploaded_at),
+                ("title") => query.OrderBy(d => d.Title),
+                _ => query.OrderBy(d => d.uploaded_at) // Default to sort by date descending
+            };
+            var pageData = await query
                 .Select(d => new
                 {
                     d.document_id,
@@ -120,17 +137,16 @@ namespace DocShareAPI.Controllers
                     d.uploaded_at,
                     d.is_public
                 })
-                .OrderBy(d => d.uploaded_at)
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
 
             return Ok(new
             {
-                Data = pagedData,
+                Data = pageData,
                 Pagination = new
                 {
-                    pagedData.CurrentPage,
-                    pagedData.TotalCount,
-                    pagedData.TotalPages
+                    pageData.CurrentPage,
+                    pageData.TotalCount,
+                    pageData.TotalPages
                 }
             });
         }
@@ -176,7 +192,7 @@ namespace DocShareAPI.Controllers
             });
         }
 
-        [HttpPut("update-title-description")]
+        [HttpPut("update-document-after-upload")]
         public async Task<ActionResult> UpdateTitle(DocumentUpdateAfterUploadDTO documents)
         {
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
@@ -199,12 +215,23 @@ namespace DocShareAPI.Controllers
             document.Title = documents.title;
             document.Description = documents.description;
             document.is_public = documents.is_public;
+            //Kiểm tra catergory_id có tồn tại không
+
+            if (documents.category_id != 0)
+            {
+                var docCate = new DocumentCategories()
+                {
+                    category_id = documents.category_id,
+                    document_id =document.document_id
+                };
+                _context.DOCUMENT_CATEGORIES.Add(docCate);
+            }
             _context.DOCUMENTS.Update(document);
             await _context.SaveChangesAsync();
 
             return Ok(new
             {
-                message = "Information saved successfully!",
+                message = "Thông tin tài liệu đã được lưu!",
                 success = true,
                 document.document_id
             });

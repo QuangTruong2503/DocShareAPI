@@ -23,7 +23,8 @@ public class TokenValidationMiddleware
         {
             "/api/users/public/",
             "/api/documents/document/",
-            "/api/verification/public/"
+            "/api/verification/public/",
+            "/api/categories/public/",
         };
 
         string? tokenSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");

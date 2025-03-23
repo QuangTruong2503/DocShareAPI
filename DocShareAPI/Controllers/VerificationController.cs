@@ -7,6 +7,10 @@ using System.Security.Cryptography;
 using PostmarkDotNet;
 using DocShareAPI.EmailServices;
 using ELearningAPI.Helpers;
+using Aspose.Pdf.Text;
+using Aspose.Pdf;
+using System.Text.Json;
+using System.Text;
 
 namespace DocShareAPI.Controllers
 {
@@ -17,12 +21,15 @@ namespace DocShareAPI.Controllers
         private readonly DocShareDbContext _context;
         private readonly VerifyEmailService _verifyEmailService;
         private readonly ResetPasswordEmailService _resetPasswordEmailService;
+        private readonly HttpClient _httpClient;
 
-        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService, ResetPasswordEmailService resetPasswordEmailService)
+        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService, ResetPasswordEmailService resetPasswordEmailService, HttpClient httpClient)
         {
             _context = context;
             _verifyEmailService = verifyEmailService;
             _resetPasswordEmailService = resetPasswordEmailService;
+            _httpClient = httpClient;
+            _httpClient.BaseAddress = new Uri("https://api.openai.com/v1/");
         }
         //Kiểm tra người dùng đã xác thực
         [HttpGet("check-user-verified")]
@@ -228,6 +235,7 @@ namespace DocShareAPI.Controllers
             await _context.SaveChangesAsync();
             return Ok(new { message = "Đổi mật khẩu thành công." });
         }
+        
         //Reset password request model
         public class ResetPasswordRequest
         {
