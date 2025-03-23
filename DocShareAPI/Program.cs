@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using MySqlConnector;
 using System.Text;
 
 
@@ -14,37 +15,66 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Lấy chứng chỉ SSL từ biến môi trường
 var sslCaCert = Environment.GetEnvironmentVariable("SSL_CA_CERT");
-if (!string.IsNullOrEmpty(sslCaCert))
-{
-    // Tạo file tạm thời chứa nội dung chứng chỉ
-    var caCertPath = "/tmp/ca.pem";  // Đường dẫn tạm thời
-    System.IO.File.WriteAllText(caCertPath, sslCaCert);
 
-    // Lấy chuỗi kết nối MySQL từ biến môi trường
-    string? connectionString = Environment.GetEnvironmentVariable("MYSQL_CONNECTION");
+// Lấy chuỗi kết nối từ biến môi trường trước
+string connectionString = Environment.GetEnvironmentVariable("MYSQL_CONNECTION");
+
+// Nếu không có trong biến môi trường, lấy từ appsettings.json
+if (string.IsNullOrEmpty(connectionString))
+{
+    connectionString = builder.Configuration.GetConnectionString("MysqlConnection");
     if (string.IsNullOrEmpty(connectionString))
     {
-        throw new InvalidOperationException("MYSQL_CONNECTION environment variable is not set.");
+        throw new InvalidOperationException("MySQL connection string is not set in environment variables (MYSQL_CONNECTION) or appsettings.json (MysqlConnection).");
     }
+}
 
-    // Cấu hình DbContext với chuỗi kết nối MySQL và SSL
-    builder.Services.AddDbContext<DocShareDbContext>(options =>
-        options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29)),
-            mySqlOptions => mySqlOptions.EnableRetryOnFailure()
-        ));
+if (!string.IsNullOrEmpty(sslCaCert))
+{
+    // Sử dụng file tạm thời an toàn
+    string caCertPath = Path.GetTempFileName();
+    try
+    {
+        File.WriteAllText(caCertPath, sslCaCert);
+
+        // Sử dụng MySqlConnectionStringBuilder để thêm thông tin SSL
+        var connectionStringBuilder = new MySqlConnectionStringBuilder(connectionString)
+        {
+            SslMode = MySqlSslMode.Required, // Hoặc Preferred tùy yêu cầu
+            SslCa = caCertPath
+        };
+        connectionString = connectionStringBuilder.ToString();
+
+        // Cấu hình DbContext với SSL
+        builder.Services.AddDbContext<DocShareDbContext>(options =>
+            options.UseMySql(
+                connectionString,
+                new MySqlServerVersion(new Version(8, 0, 29)),
+                mySqlOptions => mySqlOptions.EnableRetryOnFailure()
+            ));
+    }
+    catch (Exception ex)
+    {
+        throw new InvalidOperationException("Failed to configure SSL certificate for database connection.", ex);
+    }
+    finally
+    {
+        // Xóa file tạm sau khi dùng xong
+        if (File.Exists(caCertPath))
+        {
+            try { File.Delete(caCertPath); } catch { /* Bỏ qua lỗi xóa file */ }
+        }
+    }
 }
 else
 {
-    // Lấy chuỗi kết nối MySQL từ appsettings.json
-    string? connectionString = builder.Configuration.GetConnectionString("MysqlConnection");
-    if (string.IsNullOrEmpty(connectionString))
-    {
-        throw new InvalidOperationException("MysqlConnection is not configured in appsettings.json.");
-    }
-
-    // Cấu hình DbContext với chuỗi kết nối MySQL
+    // Cấu hình DbContext không dùng SSL
     builder.Services.AddDbContext<DocShareDbContext>(options =>
-        options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29))));
+        options.UseMySql(
+            connectionString,
+            new MySqlServerVersion(new Version(8, 0, 29)),
+            mySqlOptions => mySqlOptions.EnableRetryOnFailure()
+        ));
 }
 
 
