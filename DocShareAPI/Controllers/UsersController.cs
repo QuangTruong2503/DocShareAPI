@@ -18,18 +18,18 @@ namespace DocShareAPI.Controllers
     public class UsersController : ControllerBase
     {
         private readonly DocShareDbContext _context;
-        //Khai báo dịch vụ token
         private readonly TokenServices _tokenServices;
-        //Khai báo CLoudinary
         private readonly ILogger<UsersController> _logger;
         private readonly ICloudinaryService _cloudinaryService;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices)
+        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices, IHttpClientFactory httpClientFactory)
         {
             _logger = logger;
             _context = context;
             _cloudinaryService = cloudinaryService;
             _tokenServices = tokenServices;
+            _httpClientFactory = httpClientFactory;
         }
         // GET: api/<UsersController>
         [HttpGet]
@@ -177,6 +177,94 @@ namespace DocShareAPI.Controllers
                     error = ex.Message,
                     success = false
                 });
+            }
+        }
+
+        //Login with Google
+        [HttpPost("public/request-login-google")]
+        public async Task<IActionResult> GoogleLogin([FromBody] string AccessToken)
+        {
+            try
+            {
+                // Gọi Google User Info API với access token
+                var userInfo = await GetUserInfoFromGoogle(AccessToken);
+                if (userInfo == null)
+                {
+                    return BadRequest(new { Message = "Không thể lấy thông tin người dùng từ Google" });
+                }
+                var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == userInfo.email);
+                if (user == null)
+                {
+                    // Tạo mới user
+                    user = new Users
+                    {
+                        user_id = Guid.NewGuid(),
+                        Email = userInfo.email,
+                        Username = userInfo.email.Split('@')[0],
+                        full_name = userInfo.name,
+                        avatar_url = userInfo.picture,
+                        Role = "user",
+                        password_hash = PasswordHasher.HashPassword(Guid.NewGuid().ToString())
+                    };
+                    _context.USERS.Add(user);
+                    await _context.SaveChangesAsync();
+                }
+                // Tạo token
+                var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
+                // Thêm token vào bảng Tokens
+                var tokenEntity = new Tokens
+                {
+                    token_id = Guid.NewGuid(),
+                    user_id = user.user_id,
+                    token = token,
+                    type = TokenType.Access,
+                    expires_at = DateTime.UtcNow.AddDays(3),
+                    is_active = true,
+                    created_at = DateTime.UtcNow
+                };
+
+                try
+                {
+                    _context.TOKENS.Add(tokenEntity);
+                    await _context.SaveChangesAsync();
+                }
+                catch (DbUpdateException dbEx)
+                {
+                    // Xử lý lỗi cụ thể từ database
+                    var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
+                    return StatusCode(500, new
+                    {
+                        message = "Lỗi khi lưu token vào database",
+                        error = innerException,
+                        success = false
+                    });
+                }
+                catch (Exception ex)
+                {
+                    // Xử lý các lỗi khác liên quan đến database
+                    return StatusCode(500, new
+                    {
+                        message = "Lỗi không xác định khi lưu token",
+                        error = ex.Message,
+                        success = false
+                    });
+                }
+                return Ok(new
+                {
+                    message = "Đăng nhập thành công!",
+                    success = true,
+                    token,
+                    user = new
+                    {
+                        Email = user.Email,
+                        FullName = user.full_name,
+                        AvatarUrl = user.avatar_url
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Message = "Access token không hợp lệ", Error = ex.Message });
             }
         }
 
@@ -374,10 +462,29 @@ namespace DocShareAPI.Controllers
             });
         }
 
-        // DELETE api/<UsersController>/5
-        [HttpDelete("{id}")]
-        public void Delete(int id)
+        private async Task<GoogleUserInfo> GetUserInfoFromGoogle(string accessToken)
         {
+            var client = _httpClientFactory.CreateClient();
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+            var response = await client.GetAsync("https://www.googleapis.com/oauth2/v3/userinfo");
+            response.EnsureSuccessStatusCode();
+
+            var jsonString = await response.Content.ReadAsStringAsync();
+            var userInfo = JsonSerializer.Deserialize<GoogleUserInfo>(jsonString);
+            if (userInfo == null)
+            {
+                throw new Exception("Không thể lấy thông tin người dùng từ Google");
+            }
+            return userInfo;
         }
+    }
+    public class GoogleUserInfo
+    {
+        public required string sub { get; set; }
+        public required string email { get; set; }
+        public required bool email_verified { get; set; }
+        public required string name { get; set; }
+        public required string picture { get; set; }
     }
 }
