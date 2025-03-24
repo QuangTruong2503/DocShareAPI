@@ -89,9 +89,13 @@ namespace DocShareAPI.Controllers
                 return NotFound(new { message = "Document not found." });
             }
 
-            if (!document.is_public && (decodedTokenResponse != null && decodedTokenResponse.userID != document.user_id && decodedTokenResponse.roleID != "admin"))
+            if (!document.is_public)
             {
-                return NotFound("Đây là tài liệu riêng tư!");
+                if (decodedTokenResponse != null && (decodedTokenResponse.userID == document.user_id || decodedTokenResponse.roleID == "admin"))
+                {
+                    return Ok(document);
+                }
+                return NotFound(new {message = "Không thể truy cập vào tài liệu riêng tư!" });
             }
 
             return Ok(document);
@@ -278,7 +282,6 @@ namespace DocShareAPI.Controllers
                 return Unauthorized();
             }
 
-            using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
@@ -287,11 +290,9 @@ namespace DocShareAPI.Controllers
                     return NotFound($"No document found with ID: {documentID}");
                 }
 
+                // Cập nhật số lượt tải xuống
                 document.download_count++;
-                _context.DOCUMENTS.Update(document);
-                await _context.SaveChangesAsync();
-
-                await transaction.CommitAsync();
+                await _context.SaveChangesAsync();  // Không cần transaction
 
                 var downloadURL = $"https://res-console.cloudinary.com/{_cloudinaryService.CloudName}/media_explorer_thumbnails/{document.asset_id}/download";
                 return Ok(new
@@ -302,10 +303,10 @@ namespace DocShareAPI.Controllers
             }
             catch (Exception ex)
             {
-                await transaction.RollbackAsync();
                 return BadRequest(ex.Message);
             }
         }
+
 
         private bool IsValidDocument(IFormFile file, out string validationMessage)
         {
