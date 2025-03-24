@@ -20,7 +20,6 @@ namespace DocShareAPI.Models
         public ICollection<Tokens>? Tokens { get; set; }
         public ICollection<Likes>? Likes { get; set; }
         public ICollection<Documents>? Documents { get; set; }
-        public ICollection<Comments>? Comments { get; set; }
         public ICollection<Collections>? Collections { get; set; }
         public ICollection<Follows>? Followers { get; set; }
         public ICollection<Follows>? Following { get; set; }

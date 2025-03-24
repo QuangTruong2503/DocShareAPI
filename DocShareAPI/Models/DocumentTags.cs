@@ -8,8 +8,8 @@ namespace DocShareAPI.Models
         public int document_id { get; set; }
         public int tag_id { get; set; }
 
-        public Documents Documents { get; set; }
-        public Tags Tags { get; set; }
+        public Documents? Documents { get; set; }
+        public Tags? Tags { get; set; }
     }
 
 }

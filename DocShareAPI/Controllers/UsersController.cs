@@ -23,7 +23,7 @@ namespace DocShareAPI.Controllers
         private readonly ICloudinaryService _cloudinaryService;
         private readonly IHttpClientFactory _httpClientFactory;
 
-        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices, IHttpClientFactory httpClientFactory)
+        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices, IHttpClientFactory httpClientFactory )
         {
             _logger = logger;
             _context = context;
@@ -280,13 +280,17 @@ namespace DocShareAPI.Controllers
                     success = false
                 });
             }
+            await Task.Run(() =>
+            {
                 _context.TOKENS.Remove(tokenEntity);
-                await _context.SaveChangesAsync();
-                return Ok(new
-                {
-                    message = "Đăng xuất thành công",
-                    success = true
-                });
+                _context.SaveChanges();
+            });
+
+            return Ok(new
+            {
+                message = "Đăng xuất thành công",
+                success = true
+            });
         }
 
         //Register / Đăng ký thành viên

@@ -6,9 +6,9 @@ namespace DocShareAPI.Models
     {
         [Key]
         public int tag_id { get; set; }
-        public string Name { get; set; }
+        public required string Name { get; set; }
 
-        public ICollection<DocumentTags> DocumentTags { get; set; }
+        public ICollection<DocumentTags>? DocumentTags { get; set; }
     }
 
 }

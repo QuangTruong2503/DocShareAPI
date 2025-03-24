@@ -15,7 +15,6 @@ namespace DocShareAPI.Data
         public DbSet<DocumentCategories> DOCUMENT_CATEGORIES { get; set; }
         public DbSet<Tags> TAGS { get; set; }
         public DbSet<DocumentTags> DOCUMENT_TAGS { get; set; }
-        public DbSet<Comments> COMMENTS { get; set; }
         public DbSet<Collections> COLLECTIONS { get; set; }
         public DbSet<CollectionDocuments> COLLECTION_DOCUMENTS { get; set; }
         public DbSet<Follows> FOLLOWS { get; set; }

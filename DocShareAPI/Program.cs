@@ -10,8 +10,6 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-
-
 // Lấy chứng chỉ SSL từ biến môi trường
 var sslCaCert = Environment.GetEnvironmentVariable("SSL_CA_CERT");
 if (!string.IsNullOrEmpty(sslCaCert))
@@ -47,7 +45,6 @@ else
         options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29))));
 }
 
-
 // Thêm CORS vào dịch vụ
 builder.Services.AddCors(options =>
 {
@@ -61,9 +58,6 @@ builder.Services.AddCors(options =>
                .AllowAnyMethod();
     });
 });
-
-// Add services to the container.
-builder.Services.AddControllers();
 
 // Learn more about configuring Swagger
 builder.Services.AddEndpointsApiExplorer();
@@ -129,6 +123,10 @@ builder.Services.AddScoped<ResetPasswordEmailService>();
 // Add services Http to the container.
 builder.Services.AddHttpClient(); // Register HttpClient
 
+
+
+// Add services to the container.
+builder.Services.AddControllers();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -139,6 +137,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("AllowSpecificOrigins");
+
+app.UseDeveloperExceptionPage();
+
+app.UseRouting();
 
 app.UseHttpsRedirection();
 

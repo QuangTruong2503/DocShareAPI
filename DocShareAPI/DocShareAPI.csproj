@@ -12,6 +12,7 @@
   <ItemGroup>
     <PackageReference Include="Aspose.PDF" Version="25.3.0" />
     <PackageReference Include="CloudinaryDotNet" Version="1.27.1" />
+    <PackageReference Include="Google.Cloud.Storage.V1" Version="4.11.0" />
     <PackageReference Include="MailKit" Version="4.11.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.11" />
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.21.0" />
