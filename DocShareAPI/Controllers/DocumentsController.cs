@@ -65,10 +65,6 @@ namespace DocShareAPI.Controllers
         public async Task<ActionResult> GetDocumentByID(int documentID)
         {
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
-            if (decodedTokenResponse == null)
-            {
-                return Unauthorized();
-            }
 
             var document = await _context.DOCUMENTS
                 .Where(d => d.document_id == documentID)
@@ -93,7 +89,7 @@ namespace DocShareAPI.Controllers
                 return NotFound(new { message = "Document not found." });
             }
 
-            if (!document.is_public && (decodedTokenResponse.userID != document.user_id && decodedTokenResponse.roleID != "admin"))
+            if (!document.is_public && (decodedTokenResponse != null && decodedTokenResponse.userID != document.user_id && decodedTokenResponse.roleID != "admin"))
             {
                 return NotFound("Đây là tài liệu riêng tư!");
             }
