@@ -24,14 +24,17 @@ namespace DocShareAPI.Controllers
         private readonly VerifyEmailService _verifyEmailService;
         private readonly ResetPasswordEmailService _resetPasswordEmailService;
         private readonly HttpClient _httpClient;
-        private static readonly string API_ENDPOINT = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaSyCS9_vhAmNF6YGdU5s5fji5VQXiAfA1CAs";
+        private readonly IConfiguration _configuration;
+        private static string apiKey = "";
 
-        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService, ResetPasswordEmailService resetPasswordEmailService, HttpClient httpClient)
+        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService, ResetPasswordEmailService resetPasswordEmailService, HttpClient httpClient, IConfiguration configuration)
         {
             _context = context;
             _verifyEmailService = verifyEmailService;
             _resetPasswordEmailService = resetPasswordEmailService;
             _httpClient = httpClient;
+            _configuration = configuration;
+            apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? _configuration["GeminiApiKey"] ?? throw new ArgumentNullException("Gemini API Key is required.");
         }
         //Kiểm tra người dùng đã xác thực
         [HttpGet("check-user-verified")]
@@ -272,6 +275,7 @@ namespace DocShareAPI.Controllers
         }
         public static async Task<string> GenerateContent(string prompt)
         {
+            string apiUrl = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}";
             using (HttpClient client = new HttpClient())
             {
                 try
@@ -287,7 +291,7 @@ namespace DocShareAPI.Controllers
                     var json = JsonConvert.SerializeObject(requestBody);
                     var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                    HttpResponseMessage response = await client.PostAsync(API_ENDPOINT, content);
+                    HttpResponseMessage response = await client.PostAsync(apiUrl, content);
                     response.EnsureSuccessStatusCode();
 
                     string responseBody = await response.Content.ReadAsStringAsync();
