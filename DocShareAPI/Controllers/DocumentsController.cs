@@ -1,7 +1,7 @@
 ﻿using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
-using DocShareAPI.DataTransferObject;
+using DocShareAPI.DataTransferObject.Documents;
 using DocShareAPI.Helpers;
 using DocShareAPI.Helpers.PageList;
 using DocShareAPI.Models;
@@ -193,6 +193,42 @@ namespace DocShareAPI.Controllers
                 newDoc.thumbnail_url,
                 uploadResult
             });
+        }
+        //Cập nhật tài liệu với document_id
+        [HttpPut("update-document")]
+        public async Task<ActionResult> UpdateDocument(DocumentUpdateDTO documentUpdate)
+        {
+            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedTokenResponse == null)
+            {
+                return Unauthorized();
+            }
+            try
+            {
+                var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentUpdate.document_id);
+                if (document == null)
+                {
+                    return NotFound(new { message = "Document not found" });
+                }
+                if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
+                {
+                    return BadRequest(new { message = "You are not the owner of this document or an admin" });
+                }
+                document.Title = documentUpdate.title;
+                document.Description = documentUpdate.description;
+                document.is_public = documentUpdate.is_public;
+                await _context.SaveChangesAsync();
+                return Ok(new
+                {
+                    data = document,
+                    message = "Document updated successfully",
+                    success = true
+                });
+            }
+            catch(Exception ex)
+            {
+                return BadRequest(new {message = ex.Message });
+            }
         }
 
         [HttpPut("update-document-after-upload")]

@@ -1,4 +1,4 @@
-﻿namespace DocShareAPI.DataTransferObject
+﻿namespace DocShareAPI.DataTransferObject.Documents
 {
     public class DocumentUpdateAfterUploadDTO
     {
@@ -6,7 +6,7 @@
 
         public required string title { get; set; }
 
-        public  string? description { get; set; }
+        public string? description { get; set; }
 
         public required bool is_public { get; set; }
 

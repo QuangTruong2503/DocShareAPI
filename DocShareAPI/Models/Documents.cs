@@ -19,7 +19,7 @@ namespace DocShareAPI.Models
         public string? file_type { get; set; }
         public int file_size { get; set; }
         public required int pages {  get; set; }
-        public bool is_public { get; set; } = true;
+        public bool is_public { get; set; }
 
         public Users? Users { get; set; }
         public ICollection<DocumentCategories>? DocumentCategories { get; set; }
