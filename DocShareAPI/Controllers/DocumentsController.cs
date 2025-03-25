@@ -8,6 +8,9 @@ using DocShareAPI.Models;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 
 
 namespace DocShareAPI.Controllers
@@ -195,45 +198,73 @@ namespace DocShareAPI.Controllers
         [HttpPut("update-document-after-upload")]
         public async Task<ActionResult> UpdateTitle(DocumentUpdateAfterUploadDTO documents)
         {
-            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
-            if (decodedTokenResponse == null)
+            // Kiểm tra token sớm và trả về ngay
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
             {
                 return Unauthorized();
             }
 
-            var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documents.document_id);
+            // Tìm document với điều kiện user_id ngay từ đầu
+            var document = await _context.DOCUMENTS
+                .FirstOrDefaultAsync(d => d.document_id == documents.document_id
+                    && d.user_id == decodedToken.userID);
+
             if (document == null)
             {
-                return BadRequest(new { message = "Document not found!" });
+                return BadRequest(new { message = "Document not found or you don't have permission!" });
             }
 
-            if (document.user_id != decodedTokenResponse.userID)
-            {
-                return BadRequest(new { message = "You are not the owner of this document" });
-            }
-
+            // Cập nhật các thuộc tính cơ bản
             document.Title = documents.title;
             document.Description = documents.description;
             document.is_public = documents.is_public;
-            //Kiểm tra catergory_id có tồn tại không
 
+            // Xử lý category nếu có
             if (documents.category_id != 0)
             {
-                var docCate = new DocumentCategories()
+                _context.DOCUMENT_CATEGORIES.Add(new DocumentCategories
                 {
                     category_id = documents.category_id,
-                    document_id =document.document_id
-                };
-                _context.DOCUMENT_CATEGORIES.Add(docCate);
+                    document_id = document.document_id
+                });
             }
-            _context.DOCUMENTS.Update(document);
+
+            // Xử lý tags hiệu quả hơn
+            if (documents.tags?.Any() == true)
+            {
+                var tagIdsToAdd = new List<string>();
+
+                foreach (var tag in documents.tags)
+                {
+                    string tagId = RemoveDiacritics(tag.Name);
+                    tagIdsToAdd.Add(tagId);
+
+                    if (!await _context.TAGS.AnyAsync(t => t.tag_id == tagId))
+                    {
+                        _context.TAGS.Add(new Tags
+                        {
+                            tag_id = tagId,
+                            Name = tag.Name
+                        });
+                    }
+                }
+
+                // Thêm DocumentTags một lần
+                _context.DOCUMENT_TAGS.AddRange(tagIdsToAdd.Select(tagId => new DocumentTags
+                {
+                    document_id = document.document_id,
+                    tag_id = tagId
+                }));
+            }
+
+            // Lưu tất cả thay đổi trong một lần
             await _context.SaveChangesAsync();
 
             return Ok(new
             {
                 message = "Thông tin tài liệu đã được lưu!",
                 success = true,
-                document.document_id
+                document_id = document.document_id
             });
         }
 
@@ -389,5 +420,13 @@ namespace DocShareAPI.Controllers
 
             return await _cloudinaryService.Cloudinary.DeleteResourcesAsync(deleteParams);
         }
+        public static string RemoveDiacritics(string text)
+        {
+            string normalized = text.Normalize(NormalizationForm.FormD);
+            Regex regex = new Regex(@"\p{M}");
+            string result = regex.Replace(normalized, "").Normalize(NormalizationForm.FormC);
+            return result.ToLower().Replace(" ", ""); // Loại bỏ khoảng trắng
+        }
     }
+
 }

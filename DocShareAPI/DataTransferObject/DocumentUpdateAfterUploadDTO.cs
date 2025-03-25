@@ -11,5 +11,11 @@
         public required bool is_public { get; set; }
 
         public int category_id { get; set; }
+
+        public ICollection<TageDTO>? tags { get; set; }
+    }
+    public class TageDTO
+    {
+        public required string Name { get; set; }
     }
 }
