@@ -64,7 +64,7 @@ namespace DocShareAPI.Controllers
         }
 
 
-        [HttpGet("document/{documentID}")]
+        [HttpGet("public/document/{documentID}")]
         public async Task<ActionResult> GetDocumentByID(int documentID)
         {
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
@@ -103,7 +103,43 @@ namespace DocShareAPI.Controllers
 
             return Ok(document);
         }
+        //Lấy tài liệu theo search
+        [HttpGet("public/search-documents")]
+        public async Task<IActionResult> SearchDocuments(string search)
+        {
+            var query = from document in _context.DOCUMENTS
+                        join user in _context.USERS on document.user_id equals user.user_id
+                        join docCate in _context.DOCUMENT_CATEGORIES on document.document_id equals docCate.document_id into docCateGroup
+                        from docCate in docCateGroup.DefaultIfEmpty() // LEFT JOIN
 
+                        join category in _context.CATEGORIES on docCate.category_id equals category.category_id into categoryGroup
+                        from category in categoryGroup.DefaultIfEmpty() // LEFT JOIN
+
+                        join docTag in _context.DOCUMENT_TAGS on document.document_id equals docTag.document_id into docTagGroup
+                        from docTag in docTagGroup.DefaultIfEmpty() // LEFT JOIN
+
+                        join tag in _context.TAGS on docTag.tag_id equals tag.tag_id into tagGroup
+                        from tag in tagGroup.DefaultIfEmpty() // LEFT JOIN
+
+                        select new { document, user, category, tag };
+            
+            var documents = await query
+                .Where(q => q.document.Title.ToLower().Contains(search.ToLower())
+                    || q.category.Name.ToLower().Contains(search.ToLower())
+                    || q.tag.Name.ToLower().Contains(search.ToLower())
+                    || (q.document.Description != null && q.document.Description.ToLower().Contains(search.ToLower())))
+                .Select(q => new
+                {
+                    q.document.document_id,
+                    q.user.full_name,
+                    q.document.Title,
+                    q.document.thumbnail_url,
+                    q.document.is_public,
+                })
+                .Distinct()
+                .ToListAsync();
+            return Ok(documents);
+        }
         [HttpGet("my-uploaded-documents")]
         public async Task<ActionResult> GetMyUploadDocuments(
             [FromQuery] PaginationParams paginationParams,

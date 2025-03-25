@@ -22,7 +22,7 @@ public class TokenValidationMiddleware
         _publicPaths = new[]
         {
             "/api/users/public/",
-            "/api/documents/document/",
+            "/api/documents/public/",
             "/api/verification/public/",
             "/api/categories/public/",
         };
