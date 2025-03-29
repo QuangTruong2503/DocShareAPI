@@ -105,7 +105,7 @@ namespace DocShareAPI.Controllers
         }
         //Lấy tài liệu theo search
         [HttpGet("public/search-documents")]
-        public async Task<IActionResult> SearchDocuments(string search)
+        public async Task<IActionResult> SearchDocuments([FromQuery] PaginationParams paginationParams ,[FromQuery] string search)
         {
             var query = from document in _context.DOCUMENTS
                         join user in _context.USERS on document.user_id equals user.user_id
@@ -137,8 +137,17 @@ namespace DocShareAPI.Controllers
                     q.document.is_public,
                 })
                 .Distinct()
-                .ToListAsync();
-            return Ok(documents);
+                .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
+            return Ok(new
+            {
+                documents = documents,
+                Pagination = new
+                {
+                    documents.CurrentPage,
+                    documents.TotalCount,
+                    documents.TotalPages
+                }
+            });
         }
         [HttpGet("my-uploaded-documents")]
         public async Task<ActionResult> GetMyUploadDocuments(
