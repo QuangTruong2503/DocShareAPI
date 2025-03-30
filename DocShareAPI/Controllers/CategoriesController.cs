@@ -29,5 +29,22 @@ namespace DocShareAPI.Controllers
             var categories = await _context.CATEGORIES.Where(c => c.Name.Contains(search)).Select(c => new { c.category_id, c.Name, c.Description, c.parent_id }).ToListAsync();
             return Ok(categories);
         }
+        //Lấy danh sách categories dựa vào id
+        [HttpGet("public/get-category-by-id")]
+        public async Task<IActionResult> GetCategoryById([FromQuery] string id)
+        {
+            var category = await _context.CATEGORIES
+                .Where(c => c.category_id == id)
+                .Select(c => new { c.category_id, c.Name, c.Description, c.parent_id })
+                .FirstOrDefaultAsync();
+
+            if (category == null)
+            {
+                return NotFound();
+            }
+
+            return Ok(category);
+        }
+        
     }
 }

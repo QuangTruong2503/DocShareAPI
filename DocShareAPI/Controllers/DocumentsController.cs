@@ -198,6 +198,37 @@ namespace DocShareAPI.Controllers
                 }
             });
         }
+        [HttpGet("public/documents-by-category")]
+        public async Task<ActionResult> GetDocumentsByCategoryId([FromQuery]string categoryID, [FromQuery] PaginationParams paginationParams)
+        {
+            var query = from document in _context.DOCUMENTS
+                        join docCate in _context.DOCUMENT_CATEGORIES on document.document_id equals docCate.document_id
+                        join cate in _context.CATEGORIES on docCate.category_id equals cate.category_id
+                        where docCate.category_id == categoryID || cate.parent_id == categoryID
+                        select new
+                        {
+                            document.document_id,
+                            document.Title,
+                            document.thumbnail_url,
+                            document.is_public,
+                            document.uploaded_at
+                        };
+
+            var pagedData = await query.ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
+
+            return Ok(new
+            {
+                documents = pagedData,
+                Pagination = new
+                {
+                    pagedData.CurrentPage,
+                    pagedData.PageSize,
+                    pagedData.TotalCount,
+                    pagedData.TotalPages
+                }
+            });
+        }
+
 
         [HttpPost("upload-document")]
         public async Task<ActionResult> UploadDocument(IFormFile file)
@@ -299,16 +330,6 @@ namespace DocShareAPI.Controllers
             document.Title = documents.title;
             document.Description = documents.description;
             document.is_public = documents.is_public;
-
-            // Xử lý category nếu có
-            if (documents.category_id != 0)
-            {
-                _context.DOCUMENT_CATEGORIES.Add(new DocumentCategories
-                {
-                    category_id = documents.category_id,
-                    document_id = document.document_id
-                });
-            }
 
             // Xử lý tags hiệu quả hơn
             if (documents.tags?.Any() == true)
