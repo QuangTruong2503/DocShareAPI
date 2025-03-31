@@ -202,6 +202,7 @@ namespace DocShareAPI.Controllers
         public async Task<ActionResult> GetDocumentsByCategoryId([FromQuery]string categoryID, [FromQuery] PaginationParams paginationParams)
         {
             var query = from document in _context.DOCUMENTS
+                        join user in _context.USERS on document.user_id equals user.user_id
                         join docCate in _context.DOCUMENT_CATEGORIES on document.document_id equals docCate.document_id
                         join cate in _context.CATEGORIES on docCate.category_id equals cate.category_id
                         where docCate.category_id == categoryID || cate.parent_id == categoryID
@@ -209,6 +210,7 @@ namespace DocShareAPI.Controllers
                         {
                             document.document_id,
                             document.Title,
+                            user.full_name,
                             document.thumbnail_url,
                             document.is_public,
                             document.uploaded_at
