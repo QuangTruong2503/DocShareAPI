@@ -4,7 +4,6 @@ using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
-using PostmarkDotNet;
 using DocShareAPI.EmailServices;
 using ELearningAPI.Helpers;
 using Aspose.Pdf.Text;

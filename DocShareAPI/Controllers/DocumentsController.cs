@@ -31,7 +31,13 @@ namespace DocShareAPI.Controllers
             _cloudinaryService = cloudinaryService;
             _logger = logger;
             _maxFileSize = configuration.GetValue<long>("MaxFileSize", 10 * 1024 * 1024); // Default to 10MB
-            _allowedDocumentTypes = configuration.GetSection("AllowedDocumentTypes").Get<string[]>() ?? new[] { "application/pdf", "application/msword", "text/plain" };
+            _allowedDocumentTypes = configuration.GetSection("AllowedDocumentTypes")
+                .Get<string[]>() ?? new[] 
+                { "application/pdf", 
+                  "application/msword", 
+                  "text/plain", 
+                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document" 
+                };
         }
 
         [HttpGet("documents")]
@@ -238,40 +244,96 @@ namespace DocShareAPI.Controllers
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedTokenResponse == null)
             {
-                return Unauthorized();
+                return Unauthorized("Invalid or missing authentication token");
+            }
+
+            if (file == null || file.Length == 0)
+            {
+                _logger.LogWarning("No file provided for upload");
+                return BadRequest("No file provided for upload");
             }
 
             if (!IsValidDocument(file, out string validationMessage))
             {
-                _logger.LogWarning(validationMessage);
+                _logger.LogWarning($"File validation failed: {validationMessage}");
                 return BadRequest(validationMessage);
             }
 
-            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedTokenResponse.userID);
-            if (user != null && !user.is_verified)
+            var user = await _context.USERS
+                .FirstOrDefaultAsync(u => u.user_id == decodedTokenResponse.userID);
+
+            if (user == null)
+            {
+                _logger.LogWarning($"User not found: {decodedTokenResponse.userID}");
+                return NotFound("User not found");
+            }
+
+            if (!user.is_verified)
             {
                 return Forbid("Upload failed! Please verify your account in the settings.");
             }
 
-            var uploadResult = await UploadToCloudinary(file);
-            if (uploadResult == null || uploadResult.Error != null)
-            {
-                var errorMessage = uploadResult?.Error?.Message ?? "Unknown error during upload";
-                _logger.LogError($"Cloudinary upload failed: {errorMessage}");
-                return StatusCode(500, $"Upload to Cloudinary failed: {errorMessage}");
-            }
+            IFormFile fileToUpload = file;
+            MemoryStream pdfStream = null;
 
-            var newDoc = await CreateDocumentRecord(file, decodedTokenResponse.userID, uploadResult);
-            return Ok(new
+            try
             {
-                message = "Document uploaded successfully",
-                success = true,
-                newDoc.document_id,
-                newDoc.Title,
-                newDoc.thumbnail_url,
-                uploadResult
-            });
+                // Handle DOCX to PDF conversion
+                if (Path.GetExtension(file.FileName).ToLower() == ".docx")
+                {
+                    using (var inputStream = file.OpenReadStream())
+                    {
+                        var doc = new Aspose.Words.Document(inputStream);
+                        pdfStream = new MemoryStream();
+                        doc.Save(pdfStream, Aspose.Words.SaveFormat.Pdf);
+                        pdfStream.Position = 0;
+
+                        fileToUpload = new FormFile(
+                            pdfStream,
+                            0,
+                            pdfStream.Length,
+                            file.Name,
+                            Path.ChangeExtension(file.FileName, ".pdf"))
+                        {
+                            Headers = file.Headers,
+                            ContentType = "application/pdf"
+                        };
+                    }
+                }
+
+                // Upload to Cloudinary
+                var uploadResult = await UploadToCloudinary(fileToUpload);
+                if (uploadResult == null || uploadResult.Error != null)
+                {
+                    var errorMessage = uploadResult?.Error?.Message ?? "Unknown error during upload";
+                    _logger.LogError($"Cloudinary upload failed: {errorMessage}");
+                    return StatusCode(500, $"Upload failed: {errorMessage}");
+                }
+
+                var newDoc = await CreateDocumentRecord(fileToUpload, decodedTokenResponse.userID, uploadResult);
+
+                return Ok(new
+                {
+                    message = "Document uploaded successfully",
+                    success = true,
+                    newDoc.document_id,
+                    newDoc.Title,
+                    newDoc.thumbnail_url,
+                    uploadResult
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Upload process failed: {ex.Message}");
+                return StatusCode(500, "An error occurred during document upload");
+            }
+            finally
+            {
+                // Clean up the MemoryStream if it was created
+                pdfStream?.Dispose();
+            }
         }
+
         //Cập nhật tài liệu với document_id
         [HttpPut("update-document")]
         public async Task<ActionResult> UpdateDocument(DocumentUpdateDTO documentUpdate)
@@ -467,7 +529,7 @@ namespace DocShareAPI.Controllers
 
             return true;
         }
-
+        //Upload tài liêu
         private async Task<ImageUploadResult> UploadToCloudinary(IFormFile file)
         {
             string folder = "DocShare/Documents";
@@ -485,6 +547,7 @@ namespace DocShareAPI.Controllers
             return await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
         }
 
+        //Thêm bản ghi mới của tài liệu trong Cloudinary
         private async Task<Documents> CreateDocumentRecord(IFormFile file, Guid userId, ImageUploadResult uploadResult)
         {
             var newID = GenerateRandomCode.GenerateID();
