@@ -155,6 +155,7 @@ namespace DocShareAPI.Controllers
                 }
             });
         }
+        
         [HttpGet("my-uploaded-documents")]
         public async Task<ActionResult> GetMyUploadDocuments(
             [FromQuery] PaginationParams paginationParams,
@@ -237,6 +238,49 @@ namespace DocShareAPI.Controllers
             });
         }
 
+        //Lấy dữ liệu tài liệu theo lịch sử xem
+        [HttpPost("public/history-documents")]
+        public async Task<ActionResult> GetHistoryDocuments([FromBody] List<string> documentIDs)
+        {
+            // Validate input
+            if (documentIDs == null || !documentIDs.Any())
+            {
+                return BadRequest(new { message = "No document IDs provided." });
+            }
+
+            // Convert documentIDs to integers, handling invalid IDs
+            var validDocumentIDs = new List<int>();
+            foreach (var id in documentIDs)
+            {
+                if (int.TryParse(id, out int parsedID))
+                {
+                    validDocumentIDs.Add(parsedID);
+                }
+                // Optionally log or return invalid IDs if needed
+            }
+
+            if (!validDocumentIDs.Any())
+            {
+                return BadRequest(new { message = "No valid document IDs provided." });
+            }
+
+            // Fetch all matching documents in a single query
+            var documents = await _context.DOCUMENTS
+                .Where(d => validDocumentIDs.Contains(d.document_id))
+                .Include(d => d.Users)
+                .Select(d => new // Use a DTO for type safety
+                {
+                    d.document_id,
+                    d.Title,
+                    d.Users.full_name,
+                    d.thumbnail_url,
+                    d.is_public,
+                    d.uploaded_at
+                })
+                .ToListAsync();
+
+            return Ok(documents);
+        }
 
         [HttpPost("upload-document")]
         public async Task<ActionResult> UploadDocument(IFormFile file)
