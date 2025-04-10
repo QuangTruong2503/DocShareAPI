@@ -8,7 +8,6 @@ using DocShareAPI.Models;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -24,12 +23,14 @@ namespace DocShareAPI.Controllers
         private readonly ICloudinaryService _cloudinaryService;
         private readonly long _maxFileSize;
         private readonly string[] _allowedDocumentTypes;
+        private readonly HttpClient _httpClient;
 
-        public DocumentsController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<DocumentsController> logger, IConfiguration configuration)
+        public DocumentsController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<DocumentsController> logger, IConfiguration configuration, IHttpClientFactory httpClientFactory)
         {
             _context = context;
             _cloudinaryService = cloudinaryService;
             _logger = logger;
+            _httpClient = httpClientFactory.CreateClient();
             _maxFileSize = configuration.GetValue<long>("MaxFileSize", 10 * 1024 * 1024); // Default to 10MB
             _allowedDocumentTypes = configuration.GetSection("AllowedDocumentTypes")
                 .Get<string[]>() ?? new[] 
@@ -530,17 +531,20 @@ namespace DocShareAPI.Controllers
                 {
                     return NotFound($"No document found with ID: {documentID}");
                 }
-
+                var result = await _cloudinaryService.Cloudinary.GetResourceByAssetIdAsync(document.asset_id);
+                if (result == null || string.IsNullOrEmpty(result.SecureUrl))
+                {
+                    return NotFound("Tài liệu không tồn tại.");
+                }
+                
+                var fileBytes = await _httpClient.GetByteArrayAsync(result.SecureUrl);
+                var fileName = document.Title;
+                var contentType = "application/pdf"; // Hoặc loại MIME phù hợp với tài liệu của bạn
                 // Cập nhật số lượt tải xuống
                 document.download_count++;
                 await _context.SaveChangesAsync();  // Không cần transaction
 
-                var downloadURL = $"https://res-console.cloudinary.com/{_cloudinaryService.CloudName}/media_explorer_thumbnails/{document.asset_id}/download";
-                return Ok(new
-                {
-                    success = true,
-                    downloadURL
-                });
+                return File(fileBytes, contentType, fileName);
             }
             catch (Exception ex)
             {
