@@ -23,7 +23,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Controllers\Auth\" />
     <Folder Include="Controllers\Public\" />
   </ItemGroup>
 

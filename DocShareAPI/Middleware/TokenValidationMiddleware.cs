@@ -25,6 +25,7 @@ public class TokenValidationMiddleware
             "/api/documents/public/",
             "/api/verification/public/",
             "/api/categories/public/",
+            "/api/public"
         };
 
         string? tokenSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
