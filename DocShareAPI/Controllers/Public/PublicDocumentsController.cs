@@ -1,8 +1,10 @@
 using DocShareAPI.Data;
 using DocShareAPI.Helpers.PageList;
 using DocShareAPI.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace DocShareAPI.Controllers.Public
 {
@@ -117,14 +119,22 @@ namespace DocShareAPI.Controllers.Public
                             user.full_name,
                             document.thumbnail_url,
                             document.is_public,
-                            document.uploaded_at
+                            document.uploaded_at,
+                            category_name = cate.Name,
+                            category_description = cate.Description,
                         };
-
+            var category = await _context.CATEGORIES.FirstOrDefaultAsync(c => c.category_id == categoryID);
+            if (category == null)
+            {
+                return NotFound("Không có dữ liệu category hợp lệ");
+            }
             var pagedData = await query.ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
 
             return Ok(new
             {
                 documents = pagedData,
+                category_name = category.Name,
+                category_description = category.Description,
                 Pagination = new
                 {
                     pagedData.CurrentPage,

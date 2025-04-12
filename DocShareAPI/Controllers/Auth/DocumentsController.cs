@@ -461,6 +461,7 @@ namespace DocShareAPI.Controllers.Auth
             return newDoc;
         }
 
+        //Xóa bản ghi tài liệu trong Cloudinary
         private async Task<DelResResult> DeleteFromCloudinary(string publicId)
         {
             var deleteParams = new DelResParams
@@ -472,6 +473,7 @@ namespace DocShareAPI.Controllers.Auth
 
             return await _cloudinaryService.Cloudinary.DeleteResourcesAsync(deleteParams);
         }
+        //Loại bỏ dấu tiếng việt
         public static string RemoveDiacritics(string text)
         {
             string normalized = text.Normalize(NormalizationForm.FormD);

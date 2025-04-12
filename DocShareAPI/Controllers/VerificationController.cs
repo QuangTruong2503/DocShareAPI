@@ -22,18 +22,12 @@ namespace DocShareAPI.Controllers
         private readonly DocShareDbContext _context;
         private readonly VerifyEmailService _verifyEmailService;
         private readonly ResetPasswordEmailService _resetPasswordEmailService;
-        private readonly HttpClient _httpClient;
-        private readonly IConfiguration _configuration;
-        private static string apiKey = "";
 
-        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService, ResetPasswordEmailService resetPasswordEmailService, HttpClient httpClient, IConfiguration configuration)
+        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService, ResetPasswordEmailService resetPasswordEmailService)
         {
             _context = context;
             _verifyEmailService = verifyEmailService;
             _resetPasswordEmailService = resetPasswordEmailService;
-            _httpClient = httpClient;
-            _configuration = configuration;
-            apiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? _configuration["GeminiApiKey"] ?? throw new ArgumentNullException("Gemini API Key is required.");
         }
         //Kiểm tra người dùng đã xác thực
         [HttpGet("check-user-verified")]
@@ -238,85 +232,6 @@ namespace DocShareAPI.Controllers
             _context.TOKENS.Update(tokenRecord);
             await _context.SaveChangesAsync();
             return Ok(new { message = "Đổi mật khẩu thành công." });
-        }
-
-        [HttpPost("public/upload")]
-        public async Task<IActionResult> UploadPdf(IFormFile file)
-        {
-            if (file == null || file.Length == 0)
-                return BadRequest("No file uploaded.");
-
-            // Trích xuất văn bản từ PDF
-            using var stream = file.OpenReadStream();
-            string pdfText = ExtractTextFromPdf(stream);
-            string pdfTextRemove = pdfText.Replace("\n", " ").Replace("\r", " ");
-            // Lấy danh sách Categories từ database
-            var categories = _context.CATEGORIES
-                .Select(c => new { c.category_id, c.Name, c.Description })
-                .ToList();
-            var categoriesJson = JsonConvert.SerializeObject(categories);
-            // Gọi Gemini API để phân loại
-            var promt = $"Given the following text from a PDF:\n\n{pdfTextRemove}\n\nAnd these categories:\n\n{categoriesJson}\n\nSuggest which category best match the text content. Return only 1 category_id as number.";
-            var content = await GenerateContent(promt);
-            //string jsonString = JsonConvert.DeserializeObject<string>(content);
-            //string contentValue = jsonString.Trim();
-            //int categoryId = Int32.Parse(contentValue);
-            // Trả về kết quả hoặc lưu vào database
-            return Ok(new { content });
-        }
-
-        private string ExtractTextFromPdf(Stream stream)
-        {
-            using var document = new Aspose.Pdf.Document(stream);
-            var textAbsorber = new Aspose.Pdf.Text.TextAbsorber();
-            document.Pages.Accept(textAbsorber);
-            return textAbsorber.Text;
-        }
-        public static async Task<string> GenerateContent(string prompt)
-        {
-            string apiUrl = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}";
-            using (HttpClient client = new HttpClient())
-            {
-                try
-                {
-                    var requestBody = new
-                    {
-                        contents = new[]
-                        {
-                        new { parts = new[] { new { text = prompt } } }
-                    }
-                    };
-
-                    var json = JsonConvert.SerializeObject(requestBody);
-                    var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-                    HttpResponseMessage response = await client.PostAsync(apiUrl, content);
-                    response.EnsureSuccessStatusCode();
-
-                    string responseBody = await response.Content.ReadAsStringAsync();
-                    dynamic responseObject = JsonConvert.DeserializeObject(responseBody);
-
-                    return responseObject.candidates[0].content.parts[0].text;
-                }
-                catch (HttpRequestException ex)
-                {
-                    // Xử lý lỗi HTTP
-                    Console.WriteLine($"Lỗi HTTP: {ex.Message}");
-                    return null;
-                }
-                catch (JsonReaderException ex)
-                {
-                    // Xử lý lỗi JSON
-                    Console.WriteLine($"Lỗi JSON: {ex.Message}");
-                    return null;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Lỗi : {ex.Message}");
-                    return null;
-                }
-
-            }
         }
        
         //Reset password request model

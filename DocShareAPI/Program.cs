@@ -123,7 +123,13 @@ builder.Services.AddScoped<ResetPasswordEmailService>();
 // Add services Http to the container.
 builder.Services.AddHttpClient(); // Register HttpClient
 
-
+// Add the GeminiAIOptions configuration
+builder.Services.Configure<GeminiAIOptions>(options =>
+{
+    options.ApiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY")
+        ?? builder.Configuration["GeminiApiKey"]
+        ?? throw new InvalidOperationException("Gemini API Key is required.");
+});
 
 // Add services to the container.
 builder.Services.AddControllers();
