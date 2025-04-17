@@ -268,9 +268,15 @@ namespace DocShareAPI.Controllers
             }
         }
 
-        [HttpPost("public/request-logout")]
+        [HttpPost("request-logout")]
         public async Task<IActionResult> Logout([FromBody] string token)
         {
+            //Kiểm tra token
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
             var tokenEntity = await _context.TOKENS.FirstOrDefaultAsync(t => t.token == token);
             if (tokenEntity == null)
             {
