@@ -353,118 +353,58 @@ namespace DocShareAPI.Controllers.Auth
         }
 
         [HttpGet("download-document/{documentID}")]
-        public async Task<IActionResult> DownloadDocumentAsync([FromRoute] int documentID)
+        public async Task<IActionResult> DownloadDocumentAsync(int documentID)
         {
-            // Kiểm tra token
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedToken == null)
             {
-                return Unauthorized("Access token is missing or invalid.");
+                return Unauthorized();
             }
 
             try
             {
-                // Tìm tài liệu trong cơ sở dữ liệu
                 var document = await _context.DOCUMENTS
-                    .AsNoTracking() // Không theo dõi vì chỉ đọc dữ liệu
                     .FirstOrDefaultAsync(d => d.document_id == documentID);
 
                 if (document == null)
                 {
-                    return NotFound($"Document with ID {documentID} was not found.");
+                    return NotFound($"No document found with ID: {documentID}");
                 }
 
-                // Kiểm tra quyền truy cập (nếu cần)
-                // Ví dụ: if (document.UserId != decodedToken.UserId) return Forbid();
-
-                // Lấy tài nguyên từ Cloudinary
                 var resource = await _cloudinaryService.Cloudinary.GetResourceByAssetIdAsync(document.asset_id);
                 if (resource == null || string.IsNullOrWhiteSpace(resource.SecureUrl))
                 {
-                    return NotFound("Document resource does not exist in storage.");
+                    return NotFound("Tài liệu không tồn tại.");
                 }
 
-                // Tải nội dung file
-                var response = await _httpClient.GetAsync(resource.SecureUrl);
-                if (!response.IsSuccessStatusCode)
+                var fileContent = await _httpClient.GetByteArrayAsync(resource.SecureUrl);
+                if (fileContent == null || fileContent.Length == 0)
                 {
-                    _logger.LogWarning("Failed to download document from {Url}. Status: {Status}", resource.SecureUrl, response.StatusCode);
-                    return StatusCode((int)response.StatusCode, "Failed to download the document content.");
+                    return NotFound("Failed to download the document content.");
                 }
 
-                var fileContent = await response.Content.ReadAsByteArrayAsync();
-                if (fileContent.Length == 0)
-                {
-                    _logger.LogWarning("Document content is empty for document ID {documentID}", documentID);
-                    return NotFound("Document content is empty.");
-                }
+                // Update download count
+                document.download_count++;
+                await _context.SaveChangesAsync();
 
-                // Bắt đầu giao dịch để cập nhật download_count
-                var strategy = _context.Database.CreateExecutionStrategy();
-                await strategy.ExecuteAsync(async () =>
-                {
-                    await using var transaction = await _context.Database.BeginTransactionAsync();
-                    try
-                    {
-                        // Cập nhật download_count
-                        document.download_count++;
-                        _context.DOCUMENTS.Update(document);
-                        await _context.SaveChangesAsync();
-                        await transaction.CommitAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                        await transaction.RollbackAsync();
-                        _logger.LogError(ex, "Failed to update download count for document ID {documentID}", documentID);
-                        throw; // Ném lại để xử lý ở cấp cao hơn
-                    }
-                });
+                // Commit the transaction explicitly after all operations are successful
+                await transaction.CommitAsync();
 
-                // Vệ sinh tên file
-                var fileName = SanitizeFileName(document.Title) ?? $"Document_{documentID}.pdf";
-                var contentType = GetContentType(fileName); // Xác định Content-Type động
+                var fileName = !string.IsNullOrWhiteSpace(document.Title) ? document.Title : $"Document_{documentID}.pdf";
+                var contentType = "application/pdf"; // Adjust MIME type if needed
 
                 return File(fileContent, contentType, fileName);
             }
             catch (HttpRequestException httpEx)
             {
-                _logger.LogError(httpEx, "Failed to retrieve document ID {documentID}", documentID);
-                return StatusCode(StatusCodes.Status503ServiceUnavailable, $"Failed to retrieve document: {httpEx.Message}");
+                await transaction.RollbackAsync();
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, $"Failed to retrieve document from storage: {httpEx.Message}");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unexpected error while processing document ID {documentID}", documentID);
-                return StatusCode(StatusCodes.Status500InternalServerError, "An unexpected error occurred.");
+                await transaction.RollbackAsync();
+                return StatusCode(StatusCodes.Status500InternalServerError, $"An unexpected error occurred: {ex.Message}");
             }
-        }
-
-        // Hàm vệ sinh tên file
-        private string SanitizeFileName(string fileName)
-        {
-            if (string.IsNullOrWhiteSpace(fileName))
-                return null;
-
-            // Loại bỏ ký tự không hợp lệ và thay thế khoảng trắng
-            var invalidChars = Path.GetInvalidFileNameChars();
-            var sanitized = string.Concat(fileName.Split(invalidChars, StringSplitOptions.RemoveEmptyEntries))
-                .Replace(" ", "_");
-            return Path.HasExtension(sanitized) ? sanitized : $"{sanitized}.pdf";
-        }
-
-        // Hàm xác định Content-Type động
-        private string GetContentType(string fileName)
-        {
-            var extension = Path.GetExtension(fileName)?.ToLowerInvariant();
-            return extension switch
-            {
-                ".pdf" => "application/pdf",
-                ".doc" => "application/msword",
-                ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                ".png" => "image/png",
-                ".jpg" => "image/jpeg",
-                ".jpeg" => "image/jpeg",
-                _ => "application/octet-stream" // Mặc định cho loại không xác định
-            };
         }
 
 
