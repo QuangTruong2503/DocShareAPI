@@ -1,10 +1,8 @@
 ﻿using DocShareAPI.Data;
-using DocShareAPI.DataTransferObject;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
-using Org.BouncyCastle.Asn1.Crmf;
 using System.Text;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
@@ -62,33 +60,6 @@ namespace DocShareAPI.Controllers.Public
                     document_id = document.document_id,
                     title = document.Title,
                     summary = summary
-                });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Lỗi xử lý tài liệu: {ex.Message}");
-                return StatusCode(500, "Đã xảy ra lỗi trong quá trình xử lý tài liệu.");
-            }
-        }
-
-        //Trò chuyện với Gemini
-        [HttpPost("gemini/chat")]
-        public async Task<IActionResult> ChatWithGemini([FromBody] AIChatRequest request)
-        {
-            if (string.IsNullOrEmpty(request.Message))
-                return BadRequest("Message is required.");
-
-            try
-            {
-                var prompt = request.Message; // Lấy prompt từ yêu cầu gửi đến API
-                var response = await GenerateContent(prompt, _apiKey);
-
-                if (string.IsNullOrWhiteSpace(response))
-                    return StatusCode(500, "Gemini API failed to generate response.");
-
-                return Ok(new
-                {
-                    message = response
                 });
             }
             catch (Exception ex)
