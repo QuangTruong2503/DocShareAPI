@@ -156,7 +156,7 @@ namespace DocShareAPI.Controllers.Auth
             }
 
             IFormFile fileToUpload = file;
-            MemoryStream pdfStream = null;
+            MemoryStream? pdfStream = null;
 
             try
             {
