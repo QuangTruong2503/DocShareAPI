@@ -353,39 +353,58 @@ namespace DocShareAPI.Controllers.Auth
         }
 
         [HttpGet("download-document/{documentID}")]
-        public async Task<ActionResult> DownloadDocument(int documentID)
+        public async Task<IActionResult> DownloadDocumentAsync(int documentID)
         {
-            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
-            if (decodedTokenResponse == null)
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
             {
-                return Unauthorized();
+                return Unauthorized("Access token is missing or invalid.");
             }
 
+            await using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
+                var document = await _context.DOCUMENTS
+                    .FirstOrDefaultAsync(d => d.document_id == documentID);
+
                 if (document == null)
                 {
-                    return NotFound($"No document found with ID: {documentID}");
+                    return NotFound($"Document with ID {documentID} was not found.");
                 }
-                var result = await _cloudinaryService.Cloudinary.GetResourceByAssetIdAsync(document.asset_id);
-                if (result == null || string.IsNullOrEmpty(result.SecureUrl))
-                {
-                    return NotFound("Tài liệu không tồn tại.");
-                }
-                
-                var fileBytes = await _httpClient.GetByteArrayAsync(result.SecureUrl);
-                var fileName = document.Title;
-                var contentType = "application/pdf"; // Hoặc loại MIME phù hợp với tài liệu của bạn
-                // Cập nhật số lượt tải xuống
-                document.download_count++;
-                await _context.SaveChangesAsync();  // Không cần transaction
 
-                return File(fileBytes, contentType, fileName);
+                var resource = await _cloudinaryService.Cloudinary.GetResourceByAssetIdAsync(document.asset_id);
+                if (resource == null || string.IsNullOrWhiteSpace(resource.SecureUrl))
+                {
+                    return NotFound("Document resource does not exist in storage.");
+                }
+
+                var fileContent = await _httpClient.GetByteArrayAsync(resource.SecureUrl);
+                if (fileContent == null || fileContent.Length == 0)
+                {
+                    return NotFound("Failed to download the document content.");
+                }
+
+                // Update download count
+                document.download_count++;
+                await _context.SaveChangesAsync();
+
+                // Commit the transaction explicitly after all operations are successful
+                await transaction.CommitAsync();
+
+                var fileName = !string.IsNullOrWhiteSpace(document.Title) ? document.Title : $"Document_{documentID}.pdf";
+                var contentType = "application/pdf"; // Adjust MIME type if needed
+
+                return File(fileContent, contentType, fileName);
+            }
+            catch (HttpRequestException httpEx)
+            {
+                await transaction.RollbackAsync();
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, $"Failed to retrieve document from storage: {httpEx.Message}");
             }
             catch (Exception ex)
             {
-                return BadRequest(ex.Message);
+                await transaction.RollbackAsync();
+                return StatusCode(StatusCodes.Status500InternalServerError, $"An unexpected error occurred: {ex.Message}");
             }
         }
 
