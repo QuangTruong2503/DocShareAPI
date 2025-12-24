@@ -38,9 +38,22 @@ namespace DocShareAPI.Controllers.Public
                     d.file_size,
                     d.file_type,
                     d.uploaded_at,
-                    full_name = d.Users != null ? d.Users.full_name : string.Empty
+
+                    full_name = d.Users.full_name,
+
+                    like_count = d.Likes.Count(l => l.reaction == 1),
+                    dislike_count = d.Likes.Count(l => l.reaction == -1),
+
+                    myReaction = decodedTokenResponse == null
+                        ? (int?)null
+                        : d.Likes
+                            .Where(l => l.user_id == decodedTokenResponse.userID)
+                            .Select(l => (int?)l.reaction)
+                            .SingleOrDefault()
                 })
+                .AsNoTracking()
                 .FirstOrDefaultAsync();
+
 
             if (document == null)
             {
