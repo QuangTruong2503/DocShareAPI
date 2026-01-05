@@ -125,7 +125,8 @@ namespace DocShareAPI.Controllers
                     type = TokenType.Access,
                     expires_at = DateTime.UtcNow.AddDays(3),
                     is_active = true,
-                    created_at = DateTime.UtcNow
+                    created_at = DateTime.UtcNow,
+                    user_device = loginRequest.UserDevice
                 };
 
                 try
@@ -182,20 +183,29 @@ namespace DocShareAPI.Controllers
 
         //Login with Google
         [HttpPost("public/request-login-google")]
-        public async Task<IActionResult> GoogleLogin([FromBody] string AccessToken)
+        public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request)
         {
+            if (string.IsNullOrEmpty(request.Token))
+            {
+                return BadRequest(new { success = false, message = "Token Google không hợp lệ" });
+            }
+
             try
             {
-                // Gọi Google User Info API với access token
-                var userInfo = await GetUserInfoFromGoogle(AccessToken);
+                var userInfo = await GetUserInfoFromGoogle(request.Token);
                 if (userInfo == null)
                 {
-                    return BadRequest(new { Message = "Không thể lấy thông tin người dùng từ Google" });
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Không thể lấy thông tin người dùng từ Google"
+                    });
                 }
+
                 var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == userInfo.email);
+
                 if (user == null)
                 {
-                    // Tạo mới user
                     user = new Users
                     {
                         user_id = Guid.NewGuid(),
@@ -204,14 +214,16 @@ namespace DocShareAPI.Controllers
                         full_name = userInfo.name,
                         avatar_url = userInfo.picture,
                         Role = "user",
-                        password_hash = PasswordHasher.HashPassword(Guid.NewGuid().ToString())
+                        password_hash = PasswordHasher.HashPassword(Guid.NewGuid().ToString()),
+                        created_at = DateTime.UtcNow
                     };
+
                     _context.USERS.Add(user);
                     await _context.SaveChangesAsync();
                 }
-                // Tạo token
+
                 var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
-                // Thêm token vào bảng Tokens
+
                 var tokenEntity = new Tokens
                 {
                     token_id = Guid.NewGuid(),
@@ -220,39 +232,17 @@ namespace DocShareAPI.Controllers
                     type = TokenType.Access,
                     expires_at = DateTime.UtcNow.AddDays(3),
                     is_active = true,
-                    created_at = DateTime.UtcNow
+                    created_at = DateTime.UtcNow,
+                    user_device = request.UserDevice
                 };
 
-                try
-                {
-                    _context.TOKENS.Add(tokenEntity);
-                    await _context.SaveChangesAsync();
-                }
-                catch (DbUpdateException dbEx)
-                {
-                    // Xử lý lỗi cụ thể từ database
-                    var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
-                    return StatusCode(500, new
-                    {
-                        message = "Lỗi khi lưu token vào database",
-                        error = innerException,
-                        success = false
-                    });
-                }
-                catch (Exception ex)
-                {
-                    // Xử lý các lỗi khác liên quan đến database
-                    return StatusCode(500, new
-                    {
-                        message = "Lỗi không xác định khi lưu token",
-                        error = ex.Message,
-                        success = false
-                    });
-                }
+                _context.TOKENS.Add(tokenEntity);
+                await _context.SaveChangesAsync();
+
                 return Ok(new
                 {
-                    message = "Đăng nhập thành công!",
                     success = true,
+                    message = "Đăng nhập thành công!",
                     token,
                     user = new
                     {
@@ -264,9 +254,15 @@ namespace DocShareAPI.Controllers
             }
             catch (Exception ex)
             {
-                return BadRequest(new { Message = "Access token không hợp lệ", Error = ex.Message });
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Đăng nhập Google thất bại",
+                    error = ex.Message
+                });
             }
         }
+
 
         [HttpPost("request-logout")]
         public async Task<IActionResult> Logout([FromBody] string token)
@@ -283,12 +279,13 @@ namespace DocShareAPI.Controllers
                 return Ok(new
                 {
                     message = "Token không tồn tại",
-                    success = false
+                    success = true //vẫn đăng xuất nếu token không tồn tại
                 });
             }
             await Task.Run(() =>
             {
-                _context.TOKENS.Remove(tokenEntity);
+                tokenEntity.is_active = false;
+                _context.TOKENS.Update(tokenEntity);
                 _context.SaveChanges();
             });
 

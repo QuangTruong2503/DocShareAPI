@@ -12,7 +12,6 @@ namespace DocShareAPI.Models
         public string Reason { get; set; }
         public string Status { get; set; } = "Chờ giải quyết";
         public DateTime created_at { get; set; } = DateTime.UtcNow;
-
         public Users Users { get; set; }
         public Documents Documents { get; set; }
     }

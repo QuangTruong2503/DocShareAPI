@@ -22,6 +22,8 @@ namespace DocShareAPI.Models
 
         public bool is_active { get; set; } // Mặc định token còn hiệu lực
 
+        public string? user_device { get; set; }
+
         public Users? Users { get; set; }
     }
     // Enum để phân loại token
