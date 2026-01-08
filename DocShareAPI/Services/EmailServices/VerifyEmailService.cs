@@ -48,7 +48,7 @@ namespace DocShareAPI.EmailServices
 
         public async Task SendVerificationEmailAsync(string toEmail, string recipientName, string verificationToken)
         {
-            var domain = _configuration["DOMAIN"] ?? Environment.GetEnvironmentVariable("DOMAIN"); 
+            var domain = Environment.GetEnvironmentVariable("DOMAIN") ?? _configuration["DOMAIN"]; 
             if (string.IsNullOrEmpty(domain))
             {
                 domain = Environment.GetEnvironmentVariable("DOMAIN");
