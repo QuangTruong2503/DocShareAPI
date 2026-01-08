@@ -31,6 +31,8 @@ namespace DocShareAPI.EmailServices
             };
             mailMessage.To.Add(toEmail);
             var appPassword = Environment.GetEnvironmentVariable("EMAIL_SETTING_APP_PASSWORD") ?? _configuration["EmailSettings:AppPassword"];
+            Console.WriteLine($"FromEmail: {fromEmail}");
+            Console.WriteLine($"AppPassword is null: {string.IsNullOrEmpty(appPassword)}");
             using var smtp = new System.Net.Mail.SmtpClient
             {
                 Host = "smtp.gmail.com",
