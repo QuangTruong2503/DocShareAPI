@@ -1,16 +1,10 @@
 using DocShareAPI.Data;
+using DocShareAPI.EmailServices;
 using DocShareAPI.Models;
-using DocShareAPI.Services;
+using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
-using DocShareAPI.EmailServices;
-using ELearningAPI.Helpers;
-using Aspose.Pdf.Text;
-using Aspose.Pdf;
-using System.Text.Json;
-using System.Text;
-using Newtonsoft.Json;
 
 
 namespace DocShareAPI.Controllers
@@ -41,7 +35,7 @@ namespace DocShareAPI.Controllers
             var is_verified = await _context.USERS.Where(u => u.user_id == decodedToken.userID).Select(u => u.is_verified).FirstOrDefaultAsync();
             return Ok(new { is_verified });
         }
-        [HttpPost("generate-verify-email-token")]
+        [HttpPost("public/generate-verify-email-token")]
         public async Task<ActionResult> GenerateVerificationToken([FromBody] string email)
         {
             if (string.IsNullOrEmpty(email))
@@ -52,7 +46,7 @@ namespace DocShareAPI.Controllers
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == email);
             if (user == null)
             {
-                return NotFound(new { message = "User not found." });
+                return Ok(new { message = "Nếu email tồn tại, mã xác thực sẽ được gửi." });
             }
 
             if (user.is_verified)
@@ -73,10 +67,11 @@ namespace DocShareAPI.Controllers
 
             // Tạo token mới
             var token = GenerateRandomToken();
+            var hashedToken = Helpers.TokenHasher.HashToken(token);
             var tokenRecord = new Tokens
             {
                 user_id = user.user_id,
-                token = token,
+                token = hashedToken,
                 type = TokenType.EmailVerification,
                 is_active = true,
                 created_at = DateTime.UtcNow,
@@ -89,15 +84,14 @@ namespace DocShareAPI.Controllers
             // Gửi email xác thực
             try
             {
-                await _verifyEmailService.SendVerificationEmailAsync(
+                await _verifyEmailService.SendVerifyEmailAsync(
                     toEmail: user.Email,
                     recipientName: user.full_name ?? "Người dùng", // Giả sử có field Name, nếu không thì thay bằng giá trị mặc định
-                    verificationToken: token
+                    verifyToken: token
                 );
-                return Ok(new 
-                { 
-                    message = $"Mã xác thực đã được gửi đến email của bạn. Vui lòng kiểm tra 'Thư Mục Rác' nếu không nhận được email ", 
-                    token 
+                return Ok(new
+                {
+                    message = $"Mã xác thực đã được gửi đến email của bạn. Vui lòng kiểm tra 'Thư Mục Rác' nếu không nhận được email ",
                 });
             }
             catch (Exception ex)
@@ -110,130 +104,190 @@ namespace DocShareAPI.Controllers
         }
 
         //Xác thực token verify email
-        [HttpPost("public/verify-email-token")]
-        public async Task<ActionResult> VerifyEmailToken([FromBody] string token)
-        {
-            var tokenRecord = await _context.TOKENS
-                .Where(t => t.token == token && t.type == TokenType.EmailVerification && t.is_active && t.expires_at > DateTime.UtcNow)
-                .FirstOrDefaultAsync();
 
-            if (tokenRecord == null)
+        [HttpGet("public/verify-email")]
+        public async Task<IActionResult> VerifyEmail([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
             {
-                return BadRequest(new { message = "Token không hợp lệ hoặc đã quá hạn" });
+                return BadRequest(new { message = "Token không hợp lệ." });
             }
 
-            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == tokenRecord.user_id);
+            // Lấy tất cả token verify còn hiệu lực
+            var tokenRecords = await _context.TOKENS
+                .Where(t => t.type == TokenType.EmailVerification
+                            && t.is_active
+                            && t.expires_at > DateTime.UtcNow)
+                .ToListAsync();
+
+            // So sánh hash
+            var matchedToken = tokenRecords.FirstOrDefault(t =>
+                Helpers.TokenHasher.VerifyToken(token, t.token));
+
+            if (matchedToken == null)
+            {
+                return BadRequest(new { message = "Token không hợp lệ hoặc đã quá hạn." });
+            }
+
+            using var tx = await _context.Database.BeginTransactionAsync();
+
+            var user = await _context.USERS
+                .FirstOrDefaultAsync(u => u.user_id == matchedToken.user_id);
+
             if (user == null)
             {
-                return NotFound(new { message = "User not found." });
+                return BadRequest(new { message = "Token không hợp lệ." });
             }
 
-            user.is_verified = true;
-            tokenRecord.is_active = false;
+            if (user.is_verified)
+            {
+                return Ok(new { message = "Email đã được xác thực trước đó." });
+            }
 
-            _context.USERS.Update(user);
-            _context.TOKENS.Update(tokenRecord);
+            // Update trạng thái
+            user.is_verified = true;
+
+            // Vô hiệu hóa tất cả token verify của user
+            var userTokens = await _context.TOKENS
+                .Where(t => t.user_id == user.user_id
+                            && t.type == TokenType.EmailVerification)
+                .ToListAsync();
+
+            foreach (var t in userTokens)
+            {
+                t.is_active = false;
+            }
+
             await _context.SaveChangesAsync();
+            await tx.CommitAsync();
 
             return Ok(new { message = "Email đã được xác thực thành công." });
         }
+
 
         //Tạo token reset password
         [HttpPost("public/generate-reset-password-token")]
         public async Task<ActionResult> GenerateResetPasswordToken([FromBody] string email)
         {
-            if (string.IsNullOrEmpty(email))
-            {
-                return BadRequest(new { message = "Email is required." });
-            }
+            if (string.IsNullOrWhiteSpace(email))
+                return BadRequest();
+
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == email);
+
+            // Không tiết lộ user tồn tại hay không
             if (user == null)
             {
-                return NotFound(new { message = "User not found." });
+                return Ok(new { message = "Nếu email tồn tại, hướng dẫn đặt lại mật khẩu sẽ được gửi." });
             }
-            // Xóa token cũ nếu tồn tại
+
+            var rawToken = GenerateRandomToken();
+            var hashedToken = Helpers.TokenHasher.HashToken(rawToken);
+
+            using var tx = await _context.Database.BeginTransactionAsync();
+
             var existingToken = await _context.TOKENS
                 .Where(t => t.user_id == user.user_id && t.type == TokenType.PasswordReset)
                 .FirstOrDefaultAsync();
+
             if (existingToken != null)
-            {
                 _context.TOKENS.Remove(existingToken);
-                await _context.SaveChangesAsync();
-            }
-            // Tạo token mới
-            var token = GenerateRandomToken();
+
             var tokenRecord = new Tokens
             {
                 user_id = user.user_id,
-                token = token,
+                token = hashedToken,
                 type = TokenType.PasswordReset,
                 is_active = true,
                 created_at = DateTime.UtcNow,
-                expires_at = DateTime.UtcNow.AddMinutes(3) // Token valid for 3 minutes
+                expires_at = DateTime.UtcNow.AddMinutes(3)
             };
+
             _context.TOKENS.Add(tokenRecord);
             await _context.SaveChangesAsync();
-            // Gửi email reset password
-            try
+            await tx.CommitAsync();
+
+            // Gửi Resend
+            await _resetPasswordEmailService.SendResetPasswordEmailAsync(
+                user.Email,
+                user.full_name ?? "Người dùng",
+                rawToken
+            );
+
+            return Ok(new
             {
-                await _resetPasswordEmailService.SendResetPasswordEmailAsync(
-                    toEmail: user.Email,
-                    recipientName: user.full_name ?? "Người dùng", // Giả sử có field Name, nếu không thì thay bằng giá trị mặc định
-                    resetToken: token
-                );
-                return Ok(new { message = $"Mã xác thực đã được gửi đến email của bạn. Vui lòng kiểm tra 'Thư Mục Rác' nếu không nhận được email" });
-            }
-            catch (Exception ex)
-            {
-                // Có thể rollback token nếu gửi email thất bại
-                _context.TOKENS.Remove(tokenRecord);
-                await _context.SaveChangesAsync();
-                return StatusCode(500, new { message = "Error sending reset password email", error = ex.Message });
-            }
+                message = "Nếu email tồn tại, hướng dẫn đặt lại mật khẩu sẽ được gửi."
+            });
+
         }
 
         //Xác thực token reset password
         [HttpPost("public/verify-reset-password-token")]
         public async Task<ActionResult> VerifyResetPasswordToken([FromBody] string token)
         {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { message = "Token không hợp lệ." });
+
+            var hashedToken = Helpers.TokenHasher.HashToken(token);
+
             var tokenRecord = await _context.TOKENS
-                .Where(t => t.token == token && t.type == TokenType.PasswordReset && t.is_active && t.expires_at > DateTime.UtcNow)
+                .Where(t =>
+                    t.token == hashedToken &&
+                    t.type == TokenType.PasswordReset &&
+                    t.is_active &&
+                    t.expires_at > DateTime.UtcNow)
                 .FirstOrDefaultAsync();
+
             if (tokenRecord == null)
             {
-                return BadRequest(new { message = "Token không hợp lệ hoặc đã quá hạn" });
+                return BadRequest(new { message = "Token không hợp lệ hoặc đã quá hạn." });
             }
-            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == tokenRecord.user_id);
-            if (user == null)
-            {
-                return NotFound(new { message = "User not found." });
-            }
+
             return Ok(new { message = "Token hợp lệ." });
         }
-        // Đổi mật khẩu sau khi xác thực token reset password
+
         [HttpPost("public/change-password")]
         public async Task<ActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
         {
+            if (string.IsNullOrWhiteSpace(request.token) ||
+                string.IsNullOrWhiteSpace(request.newPassword))
+            {
+                return BadRequest(new { message = "Dữ liệu không hợp lệ." });
+            }
+
+            var hashedToken = Helpers.TokenHasher.HashToken(request.token);
+
             var tokenRecord = await _context.TOKENS
-                .Where(t => t.token == request.token && t.type == TokenType.PasswordReset && t.is_active && t.expires_at > DateTime.UtcNow)
+                .Where(t =>
+                    t.token == hashedToken &&
+                    t.type == TokenType.PasswordReset &&
+                    t.is_active &&
+                    t.expires_at > DateTime.UtcNow)
                 .FirstOrDefaultAsync();
+
             if (tokenRecord == null)
             {
-                return BadRequest(new { message = "Token không hợp lệ hoặc đã quá hạn" });
+                return BadRequest(new { message = "Token không hợp lệ hoặc đã quá hạn." });
             }
-            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == tokenRecord.user_id);
+
+            var user = await _context.USERS
+                .FirstOrDefaultAsync(u => u.user_id == tokenRecord.user_id);
+
             if (user == null)
             {
                 return NotFound(new { message = "User not found." });
             }
+
             user.password_hash = PasswordHasher.HashPassword(request.newPassword);
+
+            // Vô hiệu hóa token sau khi dùng
             tokenRecord.is_active = false;
-            _context.USERS.Update(user);
-            _context.TOKENS.Update(tokenRecord);
+
             await _context.SaveChangesAsync();
+
             return Ok(new { message = "Đổi mật khẩu thành công." });
         }
-       
+
+
         //Reset password request model
         public class ResetPasswordRequest
         {

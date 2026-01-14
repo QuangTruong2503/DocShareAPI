@@ -1,89 +1,100 @@
+using DocShareAPI.Services.EmailServices;
 using Microsoft.Extensions.Configuration;
-using System.Net.Mail;
-using System.Threading.Tasks;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 
 namespace DocShareAPI.EmailServices
 {
-    public class ResetPasswordEmailService : IEmailService
+    public class ResetPasswordEmailService : IResetPasswordEmailService
     {
         private readonly IConfiguration _configuration;
+        private readonly HttpClient _httpClient;
 
-        public ResetPasswordEmailService(IConfiguration configuration)
+        public ResetPasswordEmailService(
+            IConfiguration configuration,
+            HttpClient httpClient)
         {
             _configuration = configuration;
+            _httpClient = httpClient;
         }
 
-        public async Task SendEmailAsync(string toEmail, string subject, string body)
+        public async Task SendResetPasswordEmailAsync(
+            string toEmail,
+            string recipientName,
+            string resetToken)
         {
-            //lấy email từ appsettings.json hoặc biến môi trường
-            var fromEmail = Environment.GetEnvironmentVariable("EMAIL_SETTING_FROM_EMAIL") ?? _configuration["EmailSettings:FromEmail"];
-            if (string.IsNullOrEmpty(fromEmail))
-            {
-                throw new ArgumentNullException(nameof(fromEmail), "From email address cannot be null or empty.");
-            }
+            var apiKey =
+                Environment.GetEnvironmentVariable("RESEND_API_KEY")
+                ?? _configuration["Resend:ApiKey"];
+            var templateId =
+                Environment.GetEnvironmentVariable("RESEND_RESET_PASSWORD_TEMPLATE_ID")
+                ?? _configuration["Resend:ResetPasswordTemplateId"];
 
-            var mailMessage = new MailMessage
-            {
-                From = new MailAddress(fromEmail, "DocShare"),
-                Subject = subject,
-                Body = body,
-                IsBodyHtml = true
-            };
-            mailMessage.To.Add(toEmail);
-            var appPassword = Environment.GetEnvironmentVariable("EMAIL_SETTING_APP_PASSWORD") ?? _configuration["EmailSettings:AppPassword"];
-            Console.WriteLine($"FromEmail: {fromEmail}");
-            Console.WriteLine($"AppPassword is null: {string.IsNullOrEmpty(appPassword)}");
-            using var smtp = new System.Net.Mail.SmtpClient
-            {
-                Host = "smtp.gmail.com",
-                Port = 587,
-                EnableSsl = true,
-                DeliveryMethod = SmtpDeliveryMethod.Network,
-                UseDefaultCredentials = false,
-                Credentials = new System.Net.NetworkCredential(
-                    fromEmail,
-                    appPassword)
-            };
+            var fromEmail =
+                Environment.GetEnvironmentVariable("RESEND_FROM_EMAIL")
+                ?? _configuration["Resend:FromEmail"];
 
-            await smtp.SendMailAsync(mailMessage);
-        }
+            var domain =
+                Environment.GetEnvironmentVariable("DOMAIN")
+                ?? _configuration["DOMAIN"];
 
-        public async Task SendResetPasswordEmailAsync(string toEmail, string recipientName, string resetToken)
-        {
-            var domain = Environment.GetEnvironmentVariable("DOMAIN") ?? _configuration["DOMAIN"];
+            var appName =
+                Environment.GetEnvironmentVariable("APP_NAME")
+                ?? _configuration["APP_NAME"]
+                ?? "DocShare";
+
+            if (string.IsNullOrWhiteSpace(apiKey))
+                throw new ArgumentNullException(nameof(apiKey));
+
+            if (string.IsNullOrWhiteSpace(fromEmail))
+                throw new ArgumentNullException(nameof(fromEmail));
+
+            if (string.IsNullOrWhiteSpace(domain))
+                throw new ArgumentNullException(nameof(domain));
+
             string resetLink = $"{domain}/reset-password/{resetToken}";
-            string emailBody = GetResetPasswordEmailTemplate(recipientName, resetLink);
-            await SendEmailAsync(toEmail, "Đặt lại mật khẩu của bạn", emailBody);
-        }
 
-        private string GetResetPasswordEmailTemplate(string recipientName, string resetLink)
-        {
-            return $@"
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <style>
-                        .container {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px; }}
-                        .button {{ background-color: #FF5733; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; }}
-                        .footer {{ font-size: 12px; color: #666; margin-top: 20px; }}
-                    </style>
-                </head>
-                <body>
-                    <div class='container'>
-                        <h2>Đặt lại mật khẩu</h2>
-                        <p>Xin chào {recipientName},</p>
-                        <p>Chúng tôi nhận được yêu cầu đặt lại mật khẩu. Nhấp vào nút dưới đây để tiếp tục:</p>
-                        <p><a href='{resetLink}' class='button'>Đặt lại mật khẩu</a></p>
-                        <strong>Hết hạn sau 3 phút</strong>
-                        <p>Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này.</p>
-                        <p>Link: {resetLink}</p>
-                        <div class='footer'>
-                            <p>Đây là email tự động, vui lòng không trả lời.</p>
-                            <p>© 2025 DocShare</p>
-                        </div>
-                    </div>
-                </body>
-                </html>";
+            var payload = new
+            {
+                from = $"{appName} <{fromEmail}>",
+                to = new[] { toEmail },
+
+                // DÙNG TEMPLATE
+                template = new
+                {
+                    id = templateId,
+                    variables = new
+                    {
+                        app_name = appName,
+                        user_name = recipientName,
+                        reset_password_url = resetLink,
+                        expire_time = "3 phút"
+                    }
+                }
+            };
+
+            var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                "https://api.resend.com/emails"
+            );
+
+            request.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", apiKey);
+
+            request.Content = new StringContent(
+                JsonSerializer.Serialize(payload),
+                Encoding.UTF8,
+                "application/json"
+            );
+
+            var response = await _httpClient.SendAsync(request);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Resend template email failed: {error}");
+            }
         }
     }
 }

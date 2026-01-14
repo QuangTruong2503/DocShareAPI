@@ -1,6 +1,7 @@
 using DocShareAPI.Data;
 using DocShareAPI.EmailServices;
 using DocShareAPI.Services;
+using DocShareAPI.Services.EmailServices;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
