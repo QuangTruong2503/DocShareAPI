@@ -183,11 +183,10 @@ namespace DocShareAPI.Controllers
             var rawToken = GenerateRandomToken();
             var hashedToken = Helpers.TokenHasher.HashToken(rawToken);
 
-            using var tx = await _context.Database.BeginTransactionAsync();
-
             var existingToken = await _context.TOKENS
-                .Where(t => t.user_id == user.user_id && t.type == TokenType.PasswordReset)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(t =>
+                    t.user_id == user.user_id &&
+                    t.type == TokenType.PasswordReset);
 
             if (existingToken != null)
                 _context.TOKENS.Remove(existingToken);
@@ -203,10 +202,9 @@ namespace DocShareAPI.Controllers
             };
 
             _context.TOKENS.Add(tokenRecord);
-            await _context.SaveChangesAsync();
-            await tx.CommitAsync();
+            await _context.SaveChangesAsync(); // EF tự tạo transaction
 
-            // Gửi Resend
+            // Gửi email sau khi lưu thành công
             await _resetPasswordEmailService.SendResetPasswordEmailAsync(
                 user.Email,
                 user.full_name ?? "Người dùng",
@@ -217,8 +215,8 @@ namespace DocShareAPI.Controllers
             {
                 message = "Nếu email tồn tại, hướng dẫn đặt lại mật khẩu sẽ được gửi."
             });
-
         }
+
 
         //Xác thực token reset password
         [HttpPost("public/verify-reset-password-token")]
