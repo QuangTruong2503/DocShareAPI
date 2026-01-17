@@ -11,6 +11,7 @@
         public required bool is_public { get; set; }
 
         public ICollection<TageDTO>? tags { get; set; }
+        public ICollection<string>? categories { get; set; }
     }
     public class TageDTO
     {

@@ -128,9 +128,6 @@ namespace DocShareAPI.Controllers
             {
                 return BadRequest(new { message = "Token không hợp lệ hoặc đã quá hạn." });
             }
-
-            using var tx = await _context.Database.BeginTransactionAsync();
-
             var user = await _context.USERS
                 .FirstOrDefaultAsync(u => u.user_id == matchedToken.user_id);
 
@@ -157,10 +154,7 @@ namespace DocShareAPI.Controllers
             {
                 t.is_active = false;
             }
-
             await _context.SaveChangesAsync();
-            await tx.CommitAsync();
-
             return Ok(new { message = "Email đã được xác thực thành công." });
         }
 
