@@ -254,67 +254,119 @@ namespace DocShareAPI.Controllers.Auth
         }
 
         [HttpPut("update-document-after-upload")]
-        public async Task<ActionResult> UpdateTitle(DocumentUpdateAfterUploadDTO documents)
+        public async Task<ActionResult> UpdateDocumentAfterUpload(
+    [FromBody] DocumentUpdateAfterUploadDTO documents)
         {
-            // Kiểm tra token sớm và trả về ngay
+            //Kiểm tra token
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
             {
                 return Unauthorized();
             }
 
-            // Tìm document với điều kiện user_id ngay từ đầu
+            //Lấy document + quyền sở hữu
             var document = await _context.DOCUMENTS
-                .FirstOrDefaultAsync(d => d.document_id == documents.document_id
-                    && d.user_id == decodedToken.userID);
+                .Include(d => d.DocumentTags)
+                .Include(d => d.DocumentCategories)
+                .FirstOrDefaultAsync(d =>
+                    d.document_id == documents.document_id &&
+                    d.user_id == decodedToken.userID);
 
             if (document == null)
             {
-                return BadRequest(new { message = "Document not found or you don't have permission!" });
+                return BadRequest(new
+                {
+                    message = "Document not found or you don't have permission!"
+                });
             }
 
-            // Cập nhật các thuộc tính cơ bản
+            //Update thông tin cơ bản
             document.Title = documents.title;
             document.Description = documents.description;
             document.is_public = documents.is_public;
 
-            // Xử lý tags hiệu quả hơn
-            if (documents.tags?.Any() == true)
+            // TAGS
+            // =========================
+            if (documents.tags != null)
             {
-                var tagIdsToAdd = new List<string>();
+                // Xóa tags cũ
+                _context.DOCUMENT_TAGS.RemoveRange(document.DocumentTags);
 
-                foreach (var tag in documents.tags)
-                {
-                    string tagId = RemoveDiacritics(tag.Name);
-                    tagIdsToAdd.Add(tagId);
+                var tagNames = documents.tags
+                    .Select(t => t.Name.Trim())
+                    .Where(t => !string.IsNullOrEmpty(t))
+                    .Distinct()
+                    .ToList();
 
-                    if (!await _context.TAGS.AnyAsync(t => t.tag_id == tagId))
+                var tagIds = tagNames
+                    .Select(RemoveDiacritics)
+                    .ToList();
+
+                // Lấy các tag đã tồn tại
+                var existingTags = await _context.TAGS
+                    .Where(t => tagIds.Contains(t.tag_id))
+                    .Select(t => t.tag_id)
+                    .ToListAsync();
+
+                // Tạo tag mới nếu chưa tồn tại
+                var newTags = tagIds
+                    .Where(id => !existingTags.Contains(id))
+                    .Select(id => new Tags
                     {
-                        _context.TAGS.Add(new Tags
-                        {
-                            tag_id = tagId,
-                            Name = tag.Name
-                        });
-                    }
-                }
+                        tag_id = id,
+                        Name = tagNames[tagIds.IndexOf(id)]
+                    });
 
-                // Thêm DocumentTags một lần
-                _context.DOCUMENT_TAGS.AddRange(tagIdsToAdd.Select(tagId => new DocumentTags
+                await _context.TAGS.AddRangeAsync(newTags);
+
+                // Thêm DocumentTags
+                var documentTags = tagIds.Select(tagId => new DocumentTags
                 {
                     document_id = document.document_id,
                     tag_id = tagId
-                }));
+                });
+
+                await _context.DOCUMENT_TAGS.AddRangeAsync(documentTags);
             }
 
-            // Lưu tất cả thay đổi trong một lần
+            // =========================
+            // CATEGORIES
+            // =========================
+            if (documents.categories != null)
+            {
+                // Xóa categories cũ
+                _context.DOCUMENT_CATEGORIES.RemoveRange(document.DocumentCategories);
+
+                var categoryIds = documents.categories
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Distinct()
+                    .ToList();
+
+                // Validate category tồn tại
+                var validCategoryIds = await _context.CATEGORIES
+                    .Where(c => categoryIds.Contains(c.category_id))
+                    .Select(c => c.category_id)
+                    .ToListAsync();
+
+                var documentCategories = validCategoryIds.Select(catId => new DocumentCategories
+                {
+                    document_id = document.document_id,
+                    category_id = catId
+                });
+
+                await _context.DOCUMENT_CATEGORIES.AddRangeAsync(documentCategories);
+            }
+
+            // Save 1 lần
             await _context.SaveChangesAsync();
 
             return Ok(new
             {
-                message = "Thông tin tài liệu đã được lưu!",
                 success = true,
-                document.document_id
+                message = "Thông tin tài liệu đã được lưu!",
+                document_id = document.document_id
             });
         }
+
 
         [HttpDelete("delete-document")]
         public async Task<ActionResult> DeleteDocument(int documentID)

@@ -22,7 +22,8 @@ namespace DocShareAPI.Models
         public bool is_public { get; set; }
 
         public Users? Users { get; set; }
-        public ICollection<DocumentCategories>? DocumentCategories { get; set; }
+        public ICollection<DocumentCategories> DocumentCategories { get; set; }
+        = new List<DocumentCategories>();
         public ICollection<DocumentTags>? DocumentTags { get; set; }
         public ICollection<CollectionDocuments>? CollectionDocuments { get; set; }
         public ICollection<Likes>? Likes { get; set; }
