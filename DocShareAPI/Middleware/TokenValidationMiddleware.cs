@@ -1,4 +1,5 @@
 ﻿using DocShareAPI.Data;
+using DocShareAPI.Helpers;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
 using Microsoft.EntityFrameworkCore;
@@ -6,37 +7,37 @@ using System.Text.Json;
 
 public class TokenValidationMiddleware
 {
+    private const string BearerPrefix = "Bearer ";
+    private const string DecodedTokenKey = "DecodedToken";
+
     private readonly RequestDelegate _next;
     private readonly TokenServices _tokenServices;
-    private readonly IConfiguration _configuration;
-    private readonly string[] _publicPaths;
-    private readonly IServiceScopeFactory _scopeFactory; // Thêm để truy cập DbContext
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public TokenValidationMiddleware(RequestDelegate next,
-                                  IConfiguration configuration,
-                                  IServiceScopeFactory scopeFactory) // Thêm IServiceScopeFactory
+    // Các route cho phép anonymous
+    private readonly string[] _publicPaths =
+    {
+        "/api/document/",
+        "/api/users/public/",
+        "/api/verification/public/",
+        "/api/categories/public/",
+        "/api/public"
+    };
+
+    public TokenValidationMiddleware(
+        RequestDelegate next,
+        IConfiguration configuration,
+        IServiceScopeFactory scopeFactory)
     {
         _next = next;
-        _configuration = configuration;
         _scopeFactory = scopeFactory;
-        _publicPaths = new[]
-        {
-            "/api/users/public/",
-            "/api/verification/public/",
-            "/api/categories/public/",
-            "/api/public"
-        };
 
-        string? tokenSecretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY");
-        if (string.IsNullOrEmpty(tokenSecretKey))
-        {
-            tokenSecretKey = _configuration.GetValue<string>("TokenSecretKey");
-        }
+        string? tokenSecretKey =
+            Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
+            ?? configuration.GetValue<string>("TokenSecretKey");
 
-        if (tokenSecretKey == null)
-        {
+        if (string.IsNullOrWhiteSpace(tokenSecretKey))
             throw new InvalidOperationException("TokenSecretKey is not configured.");
-        }
 
         _tokenServices = new TokenServices(tokenSecretKey);
     }
@@ -44,107 +45,88 @@ public class TokenValidationMiddleware
     public async Task InvokeAsync(HttpContext context)
     {
         var path = context.Request.Path.Value?.ToLower();
-        const string BearerPrefix = "Bearer ";
-        string? token = null;
-        string? decodedToken = null;
-        DecodedTokenResponse? decodedTokenResponse = null;
+        bool isPublicEndpoint = path != null && _publicPaths.Any(p => path.StartsWith(p));
 
-        // Kiểm tra token và lưu vào context.Items
-        if (context.Request.Headers.TryGetValue("Authorization", out var authorizationHeader))
+        DecodedTokenResponse? decodedToken = null;
+
+        // 🔹 1. Nếu có Authorization → decode token (dù public hay private)
+        if (context.Request.Headers.TryGetValue("Authorization", out var authHeader))
         {
-            string authHeader = authorizationHeader.ToString();
-            if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                try
-                {
-                    token = authHeader.Substring(BearerPrefix.Length).Trim();
-                    decodedToken = _tokenServices.DecodeToken(token);
-                    if (decodedToken != null)
-                    {
-                        decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
-                        if (decodedTokenResponse != null)
-                        {
-                            context.Items["DecodedToken"] = decodedTokenResponse;
-                        }
-                    }
-                }
-                catch (Exception)
-                {
-                    // Xử lý lỗi
-                }
-            }
-        }
+            string headerValue = authHeader.ToString();
 
-        // Cho phép các public paths đi qua
-        if (path != null && _publicPaths.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
-        {
-            await _next(context);
-            return;
-        }
-
-        // Kiểm tra bắt buộc cho các API không public
-        if (!context.Request.Headers.TryGetValue("Authorization", out authorizationHeader))
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync("Missing Authorization header");
-            return;
-        }
-
-        string authHeaderRequired = authorizationHeader.ToString();
-        if (!authHeaderRequired.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync("Invalid Authorization header format");
-            return;
-        }
-
-        token = authHeaderRequired.Substring(BearerPrefix.Length).Trim();
-        decodedToken = _tokenServices.DecodeToken(token);
-
-        if (decodedToken == null)
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync("Invalid token");
-            return;
-        }
-
-        decodedTokenResponse = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedToken);
-        if (decodedTokenResponse == null)
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync("Failed to deserialize token");
-            return;
-        }
-
-        // Kiểm tra token trong database
-        using (var scope = _scopeFactory.CreateScope())
-        {
-            var dbContext = scope.ServiceProvider.GetRequiredService<DocShareDbContext>(); // Thay YourDbContext bằng tên DbContext của bạn
-
-            var tokenEntity = await dbContext.TOKENS
-                .FirstOrDefaultAsync(t => t.token == token && t.is_active);
-
-            if (tokenEntity == null)
+            if (!headerValue.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await context.Response.WriteAsync("Không tìm thấy token hợp lệ");
+                await context.Response.WriteAsync("Invalid Authorization header format");
                 return;
             }
 
-            if (tokenEntity.expires_at < DateTime.UtcNow)
+            string token = headerValue.Substring(BearerPrefix.Length).Trim();
+
+            try
+            {
+                var decodedJson = _tokenServices.DecodeToken(token);
+                if (decodedJson == null)
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await context.Response.WriteAsync("Invalid token");
+                    return;
+                }
+
+                decodedToken = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedJson);
+                if (decodedToken == null)
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await context.Response.WriteAsync("Invalid token payload");
+                    return;
+                }
+
+                // 🔹 2. Kiểm tra token trong DB
+                using var scope = _scopeFactory.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<DocShareDbContext>();
+
+                var tokenRecords = await dbContext.TOKENS
+                    .AsNoTracking()
+                    .Where(t =>
+                        t.type == TokenType.Access &&
+                        t.user_id == decodedToken.userID &&
+                        t.is_active &&
+                        t.expires_at > DateTime.UtcNow)
+                    .ToListAsync();
+
+                bool valid = tokenRecords.Any(t =>
+                    TokenHasher.VerifyToken(token, t.token));
+
+                if (!valid)
+                {
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await context.Response.WriteAsync("Token not found or expired");
+                    return;
+                }
+
+                // ✅ Token hợp lệ → lưu vào context
+                context.Items[DecodedTokenKey] = decodedToken;
+            }
+            catch
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await context.Response.WriteAsync("Token đã hết hạn");
+                await context.Response.WriteAsync("Invalid token");
                 return;
             }
         }
 
-        context.Items["DecodedToken"] = decodedTokenResponse;
+        // 🔹 3. Nếu endpoint PRIVATE mà KHÔNG có token → 401
+        if (!isPublicEndpoint && decodedToken == null)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsync("Authentication required");
+            return;
+        }
+
+        // 🔹 4. Cho request đi tiếp
         await _next(context);
     }
 }
-
-// Extension method giữ nguyên
 public static class TokenValidationMiddlewareExtensions
 {
     public static IApplicationBuilder UseTokenValidation(this IApplicationBuilder builder)

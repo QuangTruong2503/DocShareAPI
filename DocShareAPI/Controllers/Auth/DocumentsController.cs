@@ -289,7 +289,7 @@ namespace DocShareAPI.Controllers.Auth
             if (documents.tags != null)
             {
                 // Xóa tags cũ
-                _context.DOCUMENT_TAGS.RemoveRange(document.DocumentTags);
+                _context.DOCUMENT_TAGS.RemoveRange(document.DocumentTags ?? Enumerable.Empty<DocumentTags>());
 
                 var tagNames = documents.tags
                     .Select(t => t.Name.Trim())
