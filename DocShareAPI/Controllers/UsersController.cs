@@ -5,9 +5,10 @@ using DocShareAPI.DataTransferObject;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
 using ELearningAPI.Helpers;
+using Google.Apis.Auth;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
+using DocShareAPI.Helpers;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -21,15 +22,15 @@ namespace DocShareAPI.Controllers
         private readonly TokenServices _tokenServices;
         private readonly ILogger<UsersController> _logger;
         private readonly ICloudinaryService _cloudinaryService;
-        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IConfiguration _config;
 
-        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices, IHttpClientFactory httpClientFactory )
+        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices, IConfiguration configuration )
         {
             _logger = logger;
             _context = context;
             _cloudinaryService = cloudinaryService;
             _tokenServices = tokenServices;
-            _httpClientFactory = httpClientFactory;
+            _config = configuration;
         }
         // GET: api/<UsersController>
         [HttpGet]
@@ -89,7 +90,6 @@ namespace DocShareAPI.Controllers
                     isLogin = false
                 });
             }
-
             try
             {
                 var user = await _context.USERS
@@ -115,13 +115,13 @@ namespace DocShareAPI.Controllers
 
                 // Tạo token
                 var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
-
+                var hashedToken = TokenHasher.HashToken(token);
                 // Thêm token vào bảng Tokens
                 var tokenEntity = new Tokens
                 {
                     token_id = Guid.NewGuid(),
                     user_id = user.user_id,
-                    token = token,
+                    token = hashedToken,
                     type = TokenType.Access,
                     expires_at = DateTime.UtcNow.AddDays(3),
                     is_active = true,
@@ -181,86 +181,109 @@ namespace DocShareAPI.Controllers
             }
         }
 
-        //Login with Google
         [HttpPost("public/request-login-google")]
         public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request)
         {
-            if (string.IsNullOrEmpty(request.Token))
+            if (string.IsNullOrWhiteSpace(request.Token))
             {
                 return BadRequest(new { success = false, message = "Token Google không hợp lệ" });
             }
 
+            GoogleJsonWebSignature.Payload payload;
+
             try
             {
-                var userInfo = await GetUserInfoFromGoogle(request.Token);
-                if (userInfo == null)
-                {
-                    return BadRequest(new
+                payload = await GoogleJsonWebSignature.ValidateAsync(
+                    request.Token,
+                    new GoogleJsonWebSignature.ValidationSettings
                     {
-                        success = false,
-                        message = "Không thể lấy thông tin người dùng từ Google"
-                    });
-                }
-
-                var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == userInfo.email);
-
-                if (user == null)
-                {
-                    user = new Users
-                    {
-                        user_id = Guid.NewGuid(),
-                        Email = userInfo.email,
-                        Username = userInfo.email.Split('@')[0],
-                        full_name = userInfo.name,
-                        avatar_url = userInfo.picture,
-                        Role = "user",
-                        password_hash = PasswordHasher.HashPassword(Guid.NewGuid().ToString()),
-                        created_at = DateTime.UtcNow
-                    };
-
-                    _context.USERS.Add(user);
-                    await _context.SaveChangesAsync();
-                }
-
-                var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
-
-                var tokenEntity = new Tokens
-                {
-                    token_id = Guid.NewGuid(),
-                    user_id = user.user_id,
-                    token = token,
-                    type = TokenType.Access,
-                    expires_at = DateTime.UtcNow.AddDays(3),
-                    is_active = true,
-                    created_at = DateTime.UtcNow,
-                    user_device = request.UserDevice
-                };
-
-                _context.TOKENS.Add(tokenEntity);
-                await _context.SaveChangesAsync();
-
-                return Ok(new
-                {
-                    success = true,
-                    message = "Đăng nhập thành công!",
-                    token,
-                    user = new
-                    {
-                        Email = user.Email,
-                        FullName = user.full_name,
-                        AvatarUrl = user.avatar_url
-                    }
+                        Audience = new[] { Environment.GetEnvironmentVariable("GOOGLE_APP_CLIENT_ID") ?? _config["Google:ClientId"] }
                 });
+
             }
-            catch (Exception ex)
+            catch
             {
-                return StatusCode(500, new
+                return Unauthorized(new
                 {
                     success = false,
-                    message = "Đăng nhập Google thất bại",
-                    error = ex.Message
+                    message = "Google token không hợp lệ hoặc đã hết hạn"
                 });
             }
+
+            if (!payload.EmailVerified)
+            {
+                return Unauthorized(new
+                {
+                    success = false,
+                    message = "Email Google chưa được xác minh"
+                });
+            }
+            if (payload.Issuer != "accounts.google.com" &&
+                payload.Issuer != "https://accounts.google.com")
+            {
+                return Unauthorized("Invalid issuer");
+            }
+            if (payload.ExpirationTimeSeconds <
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            {
+                return Unauthorized("Google token đã hết hạn");
+            }
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == payload.Email);
+
+            if (user == null)
+            {
+                user = new Users
+                {
+                    user_id = Guid.NewGuid(),
+                    Email = payload.Email,
+                    Username = payload.Email.Split('@')[0] + "_" + Guid.NewGuid().ToString("N")[..6],
+                    full_name = payload.Name,
+                    avatar_url = payload.Picture,
+                    Role = "user",  
+                    password_hash = string.Empty,
+                    is_verified = payload.EmailVerified, // Google đã xác minh email
+                    created_at = DateTime.UtcNow
+                };
+
+                _context.USERS.Add(user);
+                await _context.SaveChangesAsync();
+            }
+
+            // (Optional) Disable old tokens on same device
+            await _context.TOKENS
+                .Where(t => t.user_id == user.user_id && t.user_device == request.UserDevice)
+                .ExecuteUpdateAsync(t => t.SetProperty(x => x.is_active, false));
+
+            var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
+            var hashedToken = TokenHasher.HashToken(accessToken);
+            var tokenEntity = new Tokens
+            {
+                token_id = Guid.NewGuid(),
+                user_id = user.user_id,
+                token = hashedToken,
+                type = TokenType.Access,
+                expires_at = DateTime.UtcNow.AddDays(3),
+                is_active = true,
+                created_at = DateTime.UtcNow,
+                user_device = request.UserDevice
+            };
+
+            _context.TOKENS.Add(tokenEntity);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Đăng nhập Google thành công",
+                token = accessToken,
+                user = new
+                {
+                    user.Email,
+                    FullName = user.full_name,
+                    AvatarUrl = user.avatar_url
+                }
+            });
         }
 
 
@@ -376,7 +399,7 @@ namespace DocShareAPI.Controllers
                         var uploadParams = new ImageUploadParams
                         {
                             File = new FileDescription(image.FileName, stream),
-                            Folder = $"DocShare/users/{user.Username}",
+                            Folder = $"DocShare/users/{user.user_id}",
                             Transformation = new Transformation()
                             .Width(300)
                             .Height(300)
@@ -469,22 +492,7 @@ namespace DocShareAPI.Controllers
             });
         }
 
-        private async Task<GoogleUserInfo> GetUserInfoFromGoogle(string accessToken)
-        {
-            var client = _httpClientFactory.CreateClient();
-            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-
-            var response = await client.GetAsync("https://www.googleapis.com/oauth2/v3/userinfo");
-            response.EnsureSuccessStatusCode();
-
-            var jsonString = await response.Content.ReadAsStringAsync();
-            var userInfo = JsonSerializer.Deserialize<GoogleUserInfo>(jsonString);
-            if (userInfo == null)
-            {
-                throw new Exception("Không thể lấy thông tin người dùng từ Google");
-            }
-            return userInfo;
-        }
+     
     }
     public class GoogleUserInfo
     {

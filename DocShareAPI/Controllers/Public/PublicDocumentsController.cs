@@ -22,8 +22,9 @@ namespace DocShareAPI.Controllers.Public
         [HttpGet("document/{documentID}")]
         public async Task<ActionResult> GetDocumentByID(int documentID)
         {
-            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
 
+            // Lấy document (không filter quyền)
             var document = await _context.DOCUMENTS
                 .Where(d => d.document_id == documentID)
                 .Select(d => new
@@ -38,39 +39,53 @@ namespace DocShareAPI.Controllers.Public
                     d.file_size,
                     d.file_type,
                     d.uploaded_at,
+                    like_count = (d.Likes ?? Enumerable.Empty<Likes>()).Count(l => l.reaction == 1),
+                    dislike_count = (d.Likes ?? Enumerable.Empty<Likes>()).Count(l => l.reaction == -1),
 
-                    full_name = d.Users.full_name,
-
-                    like_count = d.Likes.Count(l => l.reaction == 1),
-                    dislike_count = d.Likes.Count(l => l.reaction == -1),
-
-                    myReaction = decodedTokenResponse == null
+                    myReaction = decodedToken == null
                         ? (int?)null
-                        : d.Likes
-                            .Where(l => l.user_id == decodedTokenResponse.userID)
+                        : (d.Likes ?? Enumerable.Empty<Likes>())
+                            .Where(l => l.user_id == decodedToken.userID)
                             .Select(l => (int?)l.reaction)
-                            .SingleOrDefault()
+                            .FirstOrDefault(),
+
+                    categories = d.DocumentCategories
+                        .Select(dc => new
+                        {
+                            dc.Categories.category_id,
+                            dc.Categories.Name,
+                            dc.Categories.parent_id
+                        })
                 })
                 .AsNoTracking()
                 .FirstOrDefaultAsync();
-
 
             if (document == null)
             {
                 return NotFound(new { message = "Document not found." });
             }
 
+            // 2️⃣ Nếu document private → kiểm tra quyền
             if (!document.is_public)
             {
-                if (decodedTokenResponse != null && (decodedTokenResponse.userID == document.user_id || decodedTokenResponse.roleID == "admin"))
+                if (decodedToken == null)
                 {
-                    return Ok(document);
+                    return Unauthorized(new { message = "Login required to access this document." });
                 }
-                return NotFound(new { message = "Không thể truy cập vào tài liệu riêng tư!" });
+
+                bool isOwner = decodedToken.userID == document.user_id;
+                bool isAdmin = decodedToken.roleID == "admin";
+
+                if (!isOwner && !isAdmin)
+                {
+                    return Forbid(); // 403
+                }
             }
 
             return Ok(document);
         }
+
+
         //Lấy tài liệu theo search
         [HttpGet("search-documents")]
         public async Task<IActionResult> SearchDocuments([FromQuery] PaginationParams paginationParams, [FromQuery] string search)
@@ -118,37 +133,50 @@ namespace DocShareAPI.Controllers.Public
             });
         }
         [HttpGet("documents-by-category")]
-        public async Task<ActionResult> GetDocumentsByCategoryId([FromQuery] string categoryID, [FromQuery] PaginationParams paginationParams)
+        public async Task<ActionResult> GetDocumentsByCategoryId(
+    [FromQuery] string categoryID,
+    [FromQuery] PaginationParams paginationParams)
         {
-            var query = from document in _context.DOCUMENTS
-                        join user in _context.USERS on document.user_id equals user.user_id
-                        join docCate in _context.DOCUMENT_CATEGORIES on document.document_id equals docCate.document_id
-                        join cate in _context.CATEGORIES on docCate.category_id equals cate.category_id
-                        where docCate.category_id == categoryID || cate.parent_id == categoryID
+            // 1. Kiểm tra category
+            var category = await _context.CATEGORIES
+                .FirstOrDefaultAsync(c => c.category_id == categoryID);
+
+            if (category == null)
+                return NotFound("Không có dữ liệu category hợp lệ");
+
+            // 2. Lấy category cha + con
+            var categoryIds = await _context.CATEGORIES
+                .Where(c => c.category_id == categoryID || c.parent_id == categoryID)
+                .Select(c => c.category_id)
+                .ToListAsync();
+
+            // 3. Query document
+            var query = from doc in _context.DOCUMENTS
+                        join user in _context.USERS on doc.user_id equals user.user_id
+                        join dc in _context.DOCUMENT_CATEGORIES on doc.document_id equals dc.document_id
+                        where categoryIds.Contains(dc.category_id)
+                              && doc.is_public
                         select new
                         {
-                            document.document_id,
-                            document.Title,
+                            doc.document_id,
+                            doc.Title,
                             user.full_name,
-                            document.thumbnail_url,
-                            document.is_public,
-                            document.uploaded_at,
-                            category_name = cate.Name,
-                            category_description = cate.Description,
+                            doc.thumbnail_url,
+                            doc.uploaded_at
                         };
-            var category = await _context.CATEGORIES.FirstOrDefaultAsync(c => c.category_id == categoryID);
-            if (category == null)
-            {
-                return NotFound("Không có dữ liệu category hợp lệ");
-            }
-            var pagedData = await query.ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
+
+            var pagedData = await query
+                .Distinct()
+                .OrderByDescending(d => d.uploaded_at)
+                .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
 
             return Ok(new
             {
-                documents = pagedData,
+                category_id = category.category_id,
                 category_name = category.Name,
                 category_description = category.Description,
-                Pagination = new
+                documents = pagedData,
+                pagination = new
                 {
                     pagedData.CurrentPage,
                     pagedData.PageSize,
@@ -157,6 +185,7 @@ namespace DocShareAPI.Controllers.Public
                 }
             });
         }
+
 
         //Lấy dữ liệu tài liệu theo lịch sử xem
         [HttpPost("history-documents")]
@@ -192,7 +221,7 @@ namespace DocShareAPI.Controllers.Public
                 {
                     d.document_id,
                     d.Title,
-                    d.Users.full_name,
+                    full_name = d.Users != null ? d.Users.full_name : null,
                     d.thumbnail_url,
                     d.is_public,
                     d.uploaded_at
