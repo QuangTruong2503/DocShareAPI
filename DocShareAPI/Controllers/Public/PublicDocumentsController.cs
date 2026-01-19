@@ -39,15 +39,18 @@ namespace DocShareAPI.Controllers.Public
                     d.file_size,
                     d.file_type,
                     d.uploaded_at,
-                    like_count = (d.Likes ?? Enumerable.Empty<Likes>()).Count(l => l.reaction == 1),
-                    dislike_count = (d.Likes ?? Enumerable.Empty<Likes>()).Count(l => l.reaction == -1),
+
+                    like_count = d.Likes != null ? d.Likes.Count(l => l.reaction == 1) : 0,
+                    dislike_count = d.Likes != null ? d.Likes.Count(l => l.reaction == -1) : 0,
 
                     myReaction = decodedToken == null
                         ? (int?)null
-                        : (d.Likes ?? Enumerable.Empty<Likes>())
-                            .Where(l => l.user_id == decodedToken.userID)
-                            .Select(l => (int?)l.reaction)
-                            .FirstOrDefault(),
+                        : (d.Likes != null
+                            ? d.Likes
+                                .Where(l => l.user_id == decodedToken.userID)
+                                .Select(l => (int?)l.reaction)
+                                .FirstOrDefault()
+                            : null),
 
                     categories = d.DocumentCategories
                         .Select(dc => new
