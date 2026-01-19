@@ -218,7 +218,7 @@ namespace DocShareAPI.Controllers.Public
 
             // Fetch all matching documents in a single query
             var documents = await _context.DOCUMENTS
-                .Where(d => validDocumentIDs.Contains(d.document_id))
+                .Where(d => validDocumentIDs.Contains(d.document_id) && d.is_public == true)
                 .Include(d => d.Users)
                 .Select(d => new // Use a DTO for type safety
                 {
