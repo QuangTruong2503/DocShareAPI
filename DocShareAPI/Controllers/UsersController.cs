@@ -1,14 +1,18 @@
-﻿using CloudinaryDotNet;
+﻿using Autofac.Core;
+using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
+using DocShareAPI.Helpers;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
+using DocShareAPI.Services.EmailServices;
 using ELearningAPI.Helpers;
 using Google.Apis.Auth;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using DocShareAPI.Helpers;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
 
@@ -23,14 +27,25 @@ namespace DocShareAPI.Controllers
         private readonly ILogger<UsersController> _logger;
         private readonly ICloudinaryService _cloudinaryService;
         private readonly IConfiguration _config;
+        private readonly IDistributedCache _cache;
+        private readonly ITwoFactorEmailService _emailService;
 
-        public UsersController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<UsersController> logger, TokenServices tokenServices, IConfiguration configuration )
+        public UsersController(
+            DocShareDbContext context,
+            ICloudinaryService cloudinaryService,
+            ILogger<UsersController> logger,
+            TokenServices tokenServices,
+            IConfiguration configuration,
+            IDistributedCache cache,
+            ITwoFactorEmailService emailService)
         {
             _logger = logger;
             _context = context;
             _cloudinaryService = cloudinaryService;
             _tokenServices = tokenServices;
             _config = configuration;
+            _cache = cache;
+            _emailService = emailService;
         }
         // GET: api/<UsersController>
         [HttpGet]
@@ -61,9 +76,9 @@ namespace DocShareAPI.Controllers
                 return Unauthorized(); // Không cần nữa vì middleware đã xử lý
             }
             var user = await _context.USERS.Where(u => u.user_id == decodedTokenResponse.userID)
-                .Select(u => new { u.user_id, u.Username , u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified})
+                .Select(u => new { u.user_id, u.Username, u.full_name, u.Email, u.avatar_url, u.created_at, u.Role, u.is_verified })
                 .FirstOrDefaultAsync();
-            
+
             if (user == null)
             {
                 return BadRequest(new
@@ -79,6 +94,7 @@ namespace DocShareAPI.Controllers
             return Ok(user);
         }
         //Login
+        //Login with 2FA Check
         [HttpPost("public/request-login")]
         public async Task<IActionResult> Login([FromBody] LoginRequest loginRequest)
         {
@@ -90,6 +106,7 @@ namespace DocShareAPI.Controllers
                     isLogin = false
                 });
             }
+
             try
             {
                 var user = await _context.USERS
@@ -113,10 +130,51 @@ namespace DocShareAPI.Controllers
                     });
                 }
 
-                // Tạo token
+                // ===== KIỂM TRA 2FA =====
+                if (user.two_factor_enabled)
+                {
+                    // Tạo temporary token để verify 2FA
+                    var tempToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
+                    var hashedTempToken = TokenHasher.HashToken(tempToken);
+
+                    // Lưu temp token vào database
+                    var tempTokenEntity = new Tokens
+                    {
+                        token_id = Guid.NewGuid(),
+                        user_id = user.user_id,
+                        token = hashedTempToken,
+                        type = TokenType.TwoFactor, // Cần thêm enum value này
+                        expires_at = DateTime.UtcNow.AddMinutes(3), // Token 2FA chỉ tồn tại 03 phút
+                        is_active = true,
+                        created_at = DateTime.UtcNow,
+                        user_device = loginRequest.UserDevice
+                    };
+
+                    _context.TOKENS.Add(tempTokenEntity);
+                    await _context.SaveChangesAsync();
+
+                    // Gửi mã 2FA (tùy vào phương thức)
+                    string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode(); // Tạo mã 6 số
+                    await SendTwoFactorCode(user, twoFactorCode); // Gửi qua email/SMS/app
+
+                    // Lưu mã 2FA vào cache hoặc database (có thời hạn)
+                    await SaveTwoFactorCode(user.user_id, twoFactorCode);
+
+                    return Ok(new
+                    {
+                        message = "Yêu cầu xác thực 2FA",
+                        isLogin = false,
+                        require2FA = true,
+                        twoFactorMethod = user.two_factor_method.ToString(),
+                        tempToken = tempToken, // Token tạm để verify 2FA
+                        maskedContact = GetMaskedContact(user) // Ẩn một phần email/số điện thoại
+                    });
+                }
+
+                // ===== ĐĂNG NHẬP BÌNH THƯỜNG (KHÔNG CÓ 2FA) =====
                 var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
                 var hashedToken = TokenHasher.HashToken(token);
-                // Thêm token vào bảng Tokens
+
                 var tokenEntity = new Tokens
                 {
                     token_id = Guid.NewGuid(),
@@ -136,7 +194,6 @@ namespace DocShareAPI.Controllers
                 }
                 catch (DbUpdateException dbEx)
                 {
-                    // Xử lý lỗi cụ thể từ database
                     var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
                     return StatusCode(500, new
                     {
@@ -145,21 +202,12 @@ namespace DocShareAPI.Controllers
                         success = false
                     });
                 }
-                catch (Exception ex)
-                {
-                    // Xử lý các lỗi khác liên quan đến database
-                    return StatusCode(500, new
-                    {
-                        message = "Lỗi không xác định khi lưu token",
-                        error = ex.Message,
-                        success = false
-                    });
-                }
 
                 return Ok(new
                 {
                     message = "Đăng nhập thành công!",
                     success = true,
+                    isLogin = true,
                     token,
                     user = new
                     {
@@ -171,13 +219,177 @@ namespace DocShareAPI.Controllers
             }
             catch (Exception ex)
             {
-                // Lỗi ngoài quá trình lưu database
                 return StatusCode(500, new
                 {
                     message = "Lỗi trong quá trình đăng nhập",
                     error = ex.Message,
                     success = false
                 });
+            }
+        }
+
+        // ===== ENDPOINT XÁC NHẬN 2FA =====
+        [HttpPost("public/verify-2fa")]
+        public async Task<IActionResult> Verify2FA([FromBody] Verify2FARequest request)
+        {
+            if (string.IsNullOrEmpty(request.TempToken) || string.IsNullOrEmpty(request.Code))
+            {
+                return Ok(new
+                {
+                    message = "Thông tin xác thực không hợp lệ",
+                    success = false
+                });
+            }
+
+            try
+            {
+                // Verify temp token
+                var hashedTempToken = TokenHasher.HashToken(request.TempToken);
+                var tempTokenEntity = await _context.TOKENS
+                    .Include(t => t.Users)
+                    .FirstOrDefaultAsync(t =>
+                        t.token == hashedTempToken &&
+                        t.type == TokenType.TwoFactor &&
+                        t.is_active &&
+                        t.expires_at > DateTime.UtcNow);
+
+                if (tempTokenEntity == null)
+                {
+                    return Ok(new
+                    {
+                        message = "Token xác thực không hợp lệ hoặc đã hết hạn",
+                        success = false
+                    });
+                }
+
+                // Verify 2FA code
+                var isValidCode = await VerifyTwoFactorCode(tempTokenEntity.user_id, request.Code);
+                if (!isValidCode)
+                {
+                    return Ok(new
+                    {
+                        message = "Mã xác thực không chính xác",
+                        success = false
+                    });
+                }
+
+                // Vô hiệu hóa temp token
+                tempTokenEntity.is_active = false;
+
+                // Tạo access token chính thức
+                var user = tempTokenEntity.Users;
+                var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
+                var hashedAccessToken = TokenHasher.HashToken(accessToken);
+
+                var accessTokenEntity = new Tokens
+                {
+                    token_id = Guid.NewGuid(),
+                    user_id = user.user_id,
+                    token = hashedAccessToken,
+                    type = TokenType.Access,
+                    expires_at = DateTime.UtcNow.AddDays(3),
+                    is_active = true,
+                    created_at = DateTime.UtcNow
+                };
+
+                _context.TOKENS.Add(accessTokenEntity);
+                await _context.SaveChangesAsync();
+
+                // Xóa mã 2FA đã sử dụng
+                await DeleteTwoFactorCode(user.user_id);
+
+                return Ok(new
+                {
+                    message = "Xác thực 2FA thành công!",
+                    success = true,
+                    isLogin = true,
+                    token = accessToken,
+                    user = new
+                    {
+                        Email = user.Email,
+                        FullName = user.full_name,
+                        AvatarUrl = user.avatar_url
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    message = "Lỗi trong quá trình xác thực 2FA",
+                    error = ex.Message,
+                    success = false
+                });
+            }
+        }
+
+        [HttpPost("public/resend-2fa")]
+        public async Task<IActionResult> Resend2FA([FromBody] Resend2FARequest request)
+        {
+            if (string.IsNullOrEmpty(request.TempToken))
+            {
+                return Ok(new { message = "Token không hợp lệ", success = false });
+            }
+
+            try
+            {
+                var hashedToken = TokenHasher.HashToken(request.TempToken);
+                var tempTokenEntity = await _context.TOKENS
+                    .FirstOrDefaultAsync(t =>
+                        t.token == hashedToken &&
+                        t.type == TokenType.TwoFactor &&
+                        t.is_active &&
+                        t.expires_at > DateTime.UtcNow);
+
+                if (tempTokenEntity == null)
+                {
+                    return Ok(new { message = "Phiên xác thực không hợp lệ hoặc đã hết hạn", success = false });
+                }
+
+                // Rate limit: ví dụ dùng cache hoặc DB counter
+                var cacheKey = $"2fa:resend:{tempTokenEntity.user_id}";
+                var resendCountBytes = await _cache.GetAsync(cacheKey);
+                int resendCount = 0;
+                if (resendCountBytes != null)
+                {
+                    var resendCountString = Encoding.UTF8.GetString(resendCountBytes);
+                    int.TryParse(resendCountString, out resendCount);
+                }
+                if (resendCount >= 3) // max 3 lần
+                {
+                    return Ok(new { message = "Quá số lần gửi lại. Vui lòng thử đăng nhập lại.", success = false });
+                }
+
+                // Tăng counter và set cooldown (ví dụ 60s)
+                resendCount++;
+                var newResendCountBytes = Encoding.UTF8.GetBytes(resendCount.ToString());
+                await _cache.SetAsync(cacheKey, newResendCountBytes, new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+                });
+
+                // Sinh mã mới
+                string newCode = GenerateRandomCode.GenerateTwoFactorCode();
+
+                // Gửi lại
+                var user = await _context.USERS.FindAsync(tempTokenEntity.user_id);
+                await SendTwoFactorCode(user, newCode);
+
+                // Lưu mã mới (invalidate cũ tự động nếu bạn dùng TTL hoặc overwrite)
+                await SaveTwoFactorCode(tempTokenEntity.user_id, newCode);
+
+                return Ok(new
+                {
+                    message = "Mã xác thực mới đã được gửi",
+                    success = true,
+                    maskedContact = GetMaskedContact(user),
+                    nextResendIn = 60 // frontend dùng để disable button
+                });
+            }
+            catch (Exception ex)
+            {
+                // log ex
+                return StatusCode(500, new { message = "Lỗi hệ thống" + ex.Message, success = false });
             }
         }
 
@@ -198,7 +410,7 @@ namespace DocShareAPI.Controllers
                     new GoogleJsonWebSignature.ValidationSettings
                     {
                         Audience = new[] { Environment.GetEnvironmentVariable("GOOGLE_APP_CLIENT_ID") ?? _config["Google:ClientId"] }
-                });
+                    });
 
             }
             catch
@@ -240,7 +452,7 @@ namespace DocShareAPI.Controllers
                     Username = payload.Email.Split('@')[0] + "_" + Guid.NewGuid().ToString("N")[..6],
                     full_name = payload.Name,
                     avatar_url = payload.Picture,
-                    Role = "user",  
+                    Role = "user",
                     password_hash = string.Empty,
                     is_verified = payload.EmailVerified, // Google đã xác minh email
                     created_at = DateTime.UtcNow
@@ -361,7 +573,7 @@ namespace DocShareAPI.Controllers
             {
                 return BadRequest($"Lỗi khi đăng ký tài khoản {ex.Message}");
             }
-           
+
         }
 
         //Cập nhật hình ảnh
@@ -395,7 +607,7 @@ namespace DocShareAPI.Controllers
                 {
                     try
                     {
-                        
+
                         var uploadParams = new ImageUploadParams
                         {
                             File = new FileDescription(image.FileName, stream),
@@ -423,7 +635,7 @@ namespace DocShareAPI.Controllers
                     {
                         return StatusCode(500, $"Lỗi khi lấy assetId: {ex.Message}");
                     }
-                    
+
                 }
             }
             catch (Exception ex)
@@ -492,14 +704,76 @@ namespace DocShareAPI.Controllers
             });
         }
 
-     
-    }
-    public class GoogleUserInfo
-    {
-        public required string sub { get; set; }
-        public required string email { get; set; }
-        public required bool email_verified { get; set; }
-        public required string name { get; set; }
-        public required string picture { get; set; }
+        private async Task SendTwoFactorCode(Users user, string code)
+        {
+            switch (user.two_factor_method)
+            {
+                case TwoFactorMethod.Email:
+                    // Gửi email
+                    await _emailService.SendTwoFactorCodeAsync(
+                        toEmail: user.Email,
+                        recipientName: user.full_name ?? user.Username,
+                        twoFactorCode: code
+                        );
+                    break;
+                    //case TwoFactorMethod.SMS:
+                    //    // Gửi SMS
+                    //    await _smsService.SendTwoFactorCodeSMS(user.PhoneNumber, code);
+                    //    break;
+                    //case TwoFactorMethod.App:
+                    //    // Authenticator App - không cần gửi, user tự generate
+                    //    break;
+            }
+        }
+        private async Task SaveTwoFactorCode(Guid userId, string code)
+        {
+            // Lưu vào Redis hoặc Memory Cache với TTL 10 phút
+            var cacheKey = $"2FA:{userId}";
+            await _cache.SetStringAsync(cacheKey, code, new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
+            });
+        }
+        private async Task<bool> VerifyTwoFactorCode(Guid userId, string code)
+        {
+            var cacheKey = $"2FA:{userId}";
+            var savedCode = await _cache.GetStringAsync(cacheKey);
+            return savedCode == code;
+        }
+        private async Task DeleteTwoFactorCode(Guid userId)
+        {
+            var cacheKey = $"2FA:{userId}";
+            await _cache.RemoveAsync(cacheKey);
+        }
+        private string GetMaskedContact(Users user)
+        {
+            switch (user.two_factor_method)
+            {
+                case TwoFactorMethod.Email:
+                    var email = user.Email;
+                    var parts = email.Split('@');
+                    return $"{parts[0].Substring(0, 2)}***@{parts[1]}";
+                default:
+                    return "Authenticator App";
+            }
+        }
+        // ===== REQUEST MODELS =====
+        public class Verify2FARequest
+        {
+            public required string TempToken { get; set; }
+            public required string Code { get; set; }
+        }
+        public class Resend2FARequest
+        {
+            public required string TempToken { get; set; }
+        }
+        public class GoogleUserInfo
+        {
+            public required string sub { get; set; }
+            public required string email { get; set; }
+            public required bool email_verified { get; set; }
+            public required string name { get; set; }
+            public required string picture { get; set; }
+        }
     }
 }

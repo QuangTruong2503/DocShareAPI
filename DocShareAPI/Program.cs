@@ -8,7 +8,6 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 
-
 var builder = WebApplication.CreateBuilder(args);
 
 // Lấy chứng chỉ SSL từ biến môi trường
@@ -120,9 +119,11 @@ builder.Services.AddSingleton<ICloudinaryService, CloudinaryService>();
 //Gmail
 builder.Services.AddScoped<VerifyEmailService>();
 builder.Services.AddScoped<ResetPasswordEmailService>();
+builder.Services.AddScoped<TwoFactorEmailService>();
 
 // Add services Http to the container.
 builder.Services.AddHttpClient(); // Register HttpClient
+
 
 // Add the GeminiAIOptions configuration
 builder.Services.Configure<GeminiAIOptions>(options =>
@@ -131,6 +132,10 @@ builder.Services.Configure<GeminiAIOptions>(options =>
         ?? builder.Configuration["GeminiApiKey"]
         ?? throw new InvalidOperationException("Gemini API Key is required.");
 });
+// ===== 2FA Services =====
+builder.Services.AddDistributedMemoryCache(); // Cho 2FA cache
+// Đăng ký HttpClient cho TwoFactorEmailService
+builder.Services.AddHttpClient<ITwoFactorEmailService, TwoFactorEmailService>();
 
 // Add services to the container.
 builder.Services.AddControllers();
