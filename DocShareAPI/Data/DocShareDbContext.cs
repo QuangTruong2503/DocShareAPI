@@ -24,7 +24,9 @@ namespace DocShareAPI.Data
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
-
+            modelBuilder.Entity<Users>()
+           .Property(u => u.two_factor_method)
+           .HasConversion<string>(); // Convert enum to string
             // Đảm bảo id tự động tăng
             modelBuilder.Entity<Collections>()
                 .Property(c => c.collection_id)

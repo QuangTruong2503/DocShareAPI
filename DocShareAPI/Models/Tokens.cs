@@ -32,6 +32,7 @@ namespace DocShareAPI.Models
         Access,
         Refresh,
         EmailVerification,
-        PasswordReset
+        PasswordReset,
+        TwoFactor
     }
 }
