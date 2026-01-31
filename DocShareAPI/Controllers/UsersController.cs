@@ -31,24 +31,7 @@ namespace DocShareAPI.Controllers
             _tokenServices = tokenServices;
             _httpClientFactory = httpClientFactory;
         }
-        // GET: api/<UsersController>
-        [HttpGet]
-        public async Task<IActionResult> GetAllUsers()
-        {
-            var list = await _context.USERS.Select(u => new
-            {
-                u.user_id,
-                u.Username,
-                u.full_name,
-                u.Email,
-                u.avatar_url,
-                u.created_at,
-                u.Role,
-                u.is_verified
-            }).ToListAsync();
-            return Ok(list);
-        }
-
+        
         // GET api/<UsersController>/5
         [HttpGet("my-profile")]
         public async Task<IActionResult> GetMyProfile()
@@ -342,7 +325,7 @@ namespace DocShareAPI.Controllers
         }
 
         //Cập nhật hình ảnh
-        [HttpPut("update-image")]
+        [HttpPut("update-avatar")]
         public async Task<IActionResult> UpdateImage(IFormFile image)
         {
             //Kiểm tra token
@@ -411,19 +394,16 @@ namespace DocShareAPI.Controllers
         }
 
         //Cập nhật thông tin
-        [HttpPut("update-user")]
+        [HttpPut("update-profile")]
         public async Task<IActionResult> UpdateUser([FromBody] UserUpdateDTO userDTO)
         {
-            //Kiểm tra token
-
             //Kiểm tra token
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedToken == null)
             {
                 return Unauthorized();
             }
-            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userDTO.user_id);
-            var duplicate = await _context.USERS.AnyAsync(u => u.Email == userDTO.email);
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
             if (user == null)
             {
                 return BadRequest(new
@@ -432,21 +412,10 @@ namespace DocShareAPI.Controllers
                     success = false
                 });
             }
-            var isDuplicateUserName = await _context.USERS.AnyAsync(u =>
-
-                u.user_id != userDTO.user_id && u.Username == userDTO.Username);
-            if (isDuplicateUserName)
-            {
-                return Ok(new
-                {
-                    message = "UserName đã tồn tại",
-                    success = false
-                });
-            }
 
             var isDuplicateEmail = await _context.USERS.AnyAsync(u =>
 
-                u.user_id != userDTO.user_id && u.Email == userDTO.email);
+                u.user_id != decodedToken.userID && u.Email == userDTO.email);
             if (isDuplicateEmail)
             {
                 return Ok(new
@@ -458,14 +427,13 @@ namespace DocShareAPI.Controllers
             //Cập nhật dữ liệu
             user.full_name = userDTO.full_name;
             user.Email = userDTO.email;
-            user.Username = userDTO.Username;
             _context.USERS.Update(user);
             await _context.SaveChangesAsync();
             return Ok(new
             {
                 message = "Cập nhật thông tin thành công!",
                 success = true,
-                user = new { email = user.Email, fullName = user.full_name, avatarUrl = user.avatar_url }
+                user = new { email = user.Email, fullName = user.full_name }
             });
         }
 
