@@ -464,7 +464,7 @@ namespace DocShareAPI.Controllers
                         t.is_active &&
                         t.expires_at > DateTime.UtcNow);
 
-                if (tempTokenEntity == null)
+                if (tempTokenEntity == null || tempTokenEntity.Users == null)
                 {
                     return Ok(new
                     {
@@ -488,8 +488,8 @@ namespace DocShareAPI.Controllers
 
                 // === Bật 2FA thành công ===
                 user.two_factor_enabled = true;
-                // Nếu sau này hỗ trợ nhiều method thì có thể set ở đây
-                // user.two_factor_method = TwoFactorMethod.Email; // hoặc từ request nếu cho chọn
+                user.two_factor_method = TwoFactorMethod.Email;
+                user.two_factor_verified_at = DateTime.UtcNow;
 
                 // Vô hiệu hóa temp token
                 tempTokenEntity.is_active = false;
@@ -702,74 +702,76 @@ namespace DocShareAPI.Controllers
 
         }
 
-        //Cập nhật hình ảnh
-        [HttpPut("update-image")]
+        //Cập nhật hình ảnh đại diện
+        [HttpPut("update-avatar")]
         public async Task<IActionResult> UpdateImage(IFormFile image)
         {
-            //Kiểm tra token
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedToken == null)
             {
                 return Unauthorized();
             }
-            try
+
+            if (image == null || image.Length == 0)
+                return BadRequest("Không có ảnh được upload");
+
+            var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp", "image/jpg" };
+            if (!allowedTypes.Contains(image.ContentType))
+                return BadRequest("Định dạng ảnh không hợp lệ");
+
+            if (image.Length > 3 * 1024 * 1024)
+                return BadRequest("Ảnh không được vượt quá 3MB");
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
+            if (user == null)
+                return BadRequest("Không tìm thấy người dùng");
+
+            using var stream = image.OpenReadStream();
+
+            var uploadParams = new ImageUploadParams
             {
-                //Tìm userID
-                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
-                if (user == null)
-                {
-                    return BadRequest(new
+                File = new FileDescription(image.FileName, stream),
+                Folder = $"DocShare/users/{user.user_id}",
+                Transformation = new Transformation()
+                    .Width(250)
+                    .Height(250)
+                    .Crop("auto")
+                    .Gravity("auto")
+                    .AspectRatio(1.0)
+            };
+
+            var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
+
+            if (uploadResult.Error != null)
+                return StatusCode(500, uploadResult.Error.Message);
+
+            if (!string.IsNullOrEmpty(user.avatar_public_id))
+            {
+                await _cloudinaryService.Cloudinary.DeleteResourcesAsync(
+                    new DelResParams
                     {
-                        message = "Không tìm thấy người dùng",
-                        success = false
+                        PublicIds = new List<string> { user.avatar_public_id },
+                        ResourceType = ResourceType.Image
                     });
-                }
-                if (image == null || image.Length == 0)
-                {
-                    _logger.LogWarning("Image upload attempted with null or empty image");
-                    return BadRequest("No image uploaded or image is empty");
-                }
-                using (var stream = image.OpenReadStream())
-                {
-                    try
-                    {
-
-                        var uploadParams = new ImageUploadParams
-                        {
-                            File = new FileDescription(image.FileName, stream),
-                            Folder = $"DocShare/users/{user.user_id}",
-                            Transformation = new Transformation()
-                            .Width(300)
-                            .Height(300)
-                            .Crop("fill")
-                        };
-
-                        var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
-
-                        //Cập nhật hình ảnh
-                        user.avatar_url = uploadResult.SecureUrl.ToString();
-                        _context.USERS.Update(user);
-                        await _context.SaveChangesAsync();
-                        return Ok(new
-                        {
-                            message = "Cập nhật ảnh đại diện thành công!",
-                            success = true,
-                            user = new { email = user.Email, fullName = user.full_name, avatarUrl = user.avatar_url }
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        return StatusCode(500, $"Lỗi khi lấy assetId: {ex.Message}");
-                    }
-
-                }
             }
-            catch (Exception ex)
+
+            user.avatar_url = uploadResult.SecureUrl.ToString();
+            user.avatar_public_id = uploadResult.PublicId;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
             {
-                _logger.LogError($"Error uploading image: {ex.Message}");
-                return StatusCode(500, $"Internal server error: {ex.Message}");
-            }
+                success = true,
+                user = new
+                {
+                    fullName = user.full_name,
+                    email = user.Email,
+                    avatar = user.avatar_url
+                }
+            });
         }
+
         //Cập nhật thông tin cá nhân
         [HttpPut("update-profile")]
         public async Task<IActionResult> UpdateProfile([FromBody] UserUpdateDTO dto)
@@ -816,11 +818,40 @@ namespace DocShareAPI.Controllers
                 message = "Cập nhật thông tin thành công",
                 user = new
                 {
-                    username = user.Username,
                     fullName = user.full_name,
                     email = user.Email,
-                    avatarUrl = user.avatar_url
+                    avatar = user.avatar_url
                 }
+            });
+        }
+
+        //Test upload image
+        //Cập nhật hình ảnh đại diện
+        [HttpPut("public/update-avatar-test")]
+        public async Task<IActionResult> UpdateImageTest(IFormFile image)
+        {
+            using var stream = image.OpenReadStream();
+
+            var uploadParams = new ImageUploadParams
+            {
+                File = new FileDescription(image.FileName, stream),
+                Folder = $"DocShare/users/test",
+                Transformation = new Transformation()
+                    .Width(250)
+                    .Height(250)
+                    .Crop("auto")
+                    .Gravity("auto")
+                    .AspectRatio(1.0)
+            };
+
+            var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
+
+            if (uploadResult.Error != null)
+                return StatusCode(500, uploadResult.Error.Message);
+
+            return Ok(new
+            {
+                success = uploadResult.StatusCode,
             });
         }
 

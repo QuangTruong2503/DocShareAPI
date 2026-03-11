@@ -13,12 +13,14 @@ namespace DocShareAPI.Models
         public required string password_hash { get; set; }
         public string? full_name { get; set; }
         public string? avatar_url { get; set; }
+        public string? avatar_public_id { get; set; }
         public DateTime created_at { get; set; } = DateTime.UtcNow;
         public string Role { get; set; } = "user";
         public bool is_verified { get; set; } = false;
         public bool two_factor_enabled { get; set; } = false;
         [Column(TypeName = "varchar(20)")]
         public TwoFactorMethod? two_factor_method { get; set; }
+        public DateTime two_factor_verified_at { get; set; } = DateTime.UtcNow;
 
         public ICollection<Tokens>? Tokens { get; set; }
         public ICollection<Likes>? Likes { get; set; }
