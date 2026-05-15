@@ -2,6 +2,7 @@
 using DocShareAPI.Helpers;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
@@ -17,11 +18,10 @@ public class TokenValidationMiddleware
     // Các route cho phép anonymous
     private readonly string[] _publicPaths =
     {
-        "/api/document/",
         "/api/users/public/",
         "/api/verification/public/",
-        "/api/categories/public/",
-        "/api/public"
+        "/api/tags/public/",
+        "/api/public/"
     };
 
     public TokenValidationMiddleware(
@@ -45,7 +45,10 @@ public class TokenValidationMiddleware
     public async Task InvokeAsync(HttpContext context)
     {
         var path = context.Request.Path.Value?.ToLower();
-        bool isPublicEndpoint = path != null && _publicPaths.Any(p => path.StartsWith(p));
+        bool allowsAnonymous = context.GetEndpoint()?.Metadata.GetMetadata<IAllowAnonymous>() != null;
+        bool isPublicEndpoint = allowsAnonymous
+            || path is "/" or "/api" or "/api/public"
+            || path != null && _publicPaths.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 
         DecodedTokenResponse? decodedToken = null;
 

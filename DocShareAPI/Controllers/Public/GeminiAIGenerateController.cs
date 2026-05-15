@@ -4,7 +4,7 @@ using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
-using Org.BouncyCastle.Asn1.Crmf;
+using Newtonsoft.Json.Linq;
 using System.Text;
 
 // For more information on enabling Web API for empty projects, visit https://go.microsoft.com/fwlink/?LinkID=397860
@@ -18,15 +18,18 @@ namespace DocShareAPI.Controllers.Public
         private readonly DocShareDbContext _context;
         private readonly ICloudinaryService _cloudinaryService;
         private readonly string _apiKey;
+        private readonly HttpClient _httpClient;
 
         public GeminiAIGenerateController(
             DocShareDbContext context,
             ICloudinaryService cloudinaryService,
-            IOptions<GeminiAIOptions> geminiOptions)
+            IOptions<GeminiAIOptions> geminiOptions,
+            IHttpClientFactory httpClientFactory)
         {
             _context = context;
             _cloudinaryService = cloudinaryService;
             _apiKey = geminiOptions.Value.ApiKey ?? throw new ArgumentNullException("Gemini API Key is missing.");
+            _httpClient = httpClientFactory.CreateClient();
         }
         [HttpGet("gemini/document-summary")]
         public async Task<IActionResult> SummarizeDocument([FromQuery] int documentId)
@@ -42,8 +45,7 @@ namespace DocShareAPI.Controllers.Public
             try
             {
                 // 2. Tải file PDF từ Cloudinary
-                using var httpClient = new HttpClient();
-                var pdfStream = await httpClient.GetStreamAsync(document.file_url);
+                var pdfStream = await _httpClient.GetStreamAsync(document.file_url);
 
                 // 3. Trích xuất văn bản
                 string pdfText = ExtractTextFromPdf(pdfStream);
@@ -51,7 +53,7 @@ namespace DocShareAPI.Controllers.Public
 
                 // 4. Gửi prompt tới Gemini
                 var prompt = $"Hãy đọc và tóm tắt nội dung chính của tài liệu PDF sau:\n\n{cleanedText}\n\nTóm tắt ngắn gọn, rõ ràng(có phân cấp đoạn văn bản giúp chuyên nghiệp hơn).";
-                var summary = await GenerateContent(prompt, _apiKey);
+                var summary = await GenerateContent(prompt);
 
                 if (string.IsNullOrWhiteSpace(summary))
                     return StatusCode(500, "Gemini API failed to generate summary.");
@@ -81,7 +83,7 @@ namespace DocShareAPI.Controllers.Public
             try
             {
                 var prompt = request.Message; // Lấy prompt từ yêu cầu gửi đến API
-                var response = await GenerateContent(prompt, _apiKey);
+                var response = await GenerateContent(prompt);
 
                 if (string.IsNullOrWhiteSpace(response))
                     return StatusCode(500, "Gemini API failed to generate response.");
@@ -107,50 +109,44 @@ namespace DocShareAPI.Controllers.Public
             return textAbsorber.Text;
         }
 
-        public static async Task<string> GenerateContent(string prompt, string apiKey)
+        private async Task<string?> GenerateContent(string prompt)
         {
-            string apiUrl = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}";
-            using (HttpClient client = new HttpClient())
+            string apiUrl = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={_apiKey}";
+            try
             {
-                try
+                var requestBody = new
                 {
-                    var requestBody = new
+                    contents = new[]
                     {
-                        contents = new[]
-                        {
                         new { parts = new[] { new { text = prompt } } }
                     }
-                    };
+                };
 
-                    var json = JsonConvert.SerializeObject(requestBody);
-                    var content = new StringContent(json, Encoding.UTF8, "application/json");
+                var json = JsonConvert.SerializeObject(requestBody);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                    HttpResponseMessage response = await client.PostAsync(apiUrl, content);
-                    response.EnsureSuccessStatusCode();
+                HttpResponseMessage response = await _httpClient.PostAsync(apiUrl, content);
+                response.EnsureSuccessStatusCode();
 
-                    string responseBody = await response.Content.ReadAsStringAsync();
-                    dynamic responseObject = JsonConvert.DeserializeObject(responseBody);
+                string responseBody = await response.Content.ReadAsStringAsync();
+                var responseObject = JObject.Parse(responseBody);
 
-                    return responseObject.candidates[0].content.parts[0].text;
-                }
-                catch (HttpRequestException ex)
-                {
-                    // Xử lý lỗi HTTP
-                    Console.WriteLine($"Lỗi HTTP: {ex.Message}");
-                    return null;
-                }
-                catch (JsonReaderException ex)
-                {
-                    // Xử lý lỗi JSON
-                    Console.WriteLine($"Lỗi JSON: {ex.Message}");
-                    return null;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Lỗi : {ex.Message}");
-                    return null;
-                }
-
+                return responseObject["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.ToString();
+            }
+            catch (HttpRequestException ex)
+            {
+                Console.WriteLine($"Lỗi HTTP: {ex.Message}");
+                return null;
+            }
+            catch (JsonReaderException ex)
+            {
+                Console.WriteLine($"Lỗi JSON: {ex.Message}");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Lỗi : {ex.Message}");
+                return null;
             }
         }
 

@@ -258,6 +258,15 @@ namespace DocShareAPI.Controllers
 
                 // Tạo access token chính thức
                 var user = tempTokenEntity.Users;
+                if (user == null)
+                {
+                    return Ok(new
+                    {
+                        message = "Phiên xác thực không hợp lệ",
+                        success = false
+                    });
+                }
+
                 var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
                 var hashedAccessToken = TokenHasher.HashToken(accessToken);
 
@@ -354,6 +363,11 @@ namespace DocShareAPI.Controllers
 
                 // Gửi lại
                 var user = await _context.USERS.FindAsync(tempTokenEntity.user_id);
+                if (user == null)
+                {
+                    return Ok(new { message = "Không tìm thấy người dùng", success = false });
+                }
+
                 await SendTwoFactorCode(user, newCode);
 
                 // Lưu mã mới (invalidate cũ tự động nếu bạn dùng TTL hoặc overwrite)
@@ -634,7 +648,23 @@ namespace DocShareAPI.Controllers
             {
                 return Unauthorized();
             }
-            var tokenEntity = await _context.TOKENS.FirstOrDefaultAsync(t => t.token == token);
+
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return BadRequest(new
+                {
+                    message = "Token không hợp lệ",
+                    success = false
+                });
+            }
+
+            var hashedToken = TokenHasher.HashToken(token);
+            var tokenEntity = await _context.TOKENS.FirstOrDefaultAsync(t =>
+                t.token == hashedToken &&
+                t.user_id == decodedToken.userID &&
+                t.type == TokenType.Access &&
+                t.is_active);
+
             if (tokenEntity == null)
             {
                 return Ok(new
@@ -643,12 +673,9 @@ namespace DocShareAPI.Controllers
                     success = true //vẫn đăng xuất nếu token không tồn tại
                 });
             }
-            await Task.Run(() =>
-            {
-                tokenEntity.is_active = false;
-                _context.TOKENS.Update(tokenEntity);
-                _context.SaveChanges();
-            });
+
+            tokenEntity.is_active = false;
+            await _context.SaveChangesAsync();
 
             return Ok(new
             {
@@ -822,36 +849,6 @@ namespace DocShareAPI.Controllers
                     email = user.Email,
                     avatar = user.avatar_url
                 }
-            });
-        }
-
-        //Test upload image
-        //Cập nhật hình ảnh đại diện
-        [HttpPut("public/update-avatar-test")]
-        public async Task<IActionResult> UpdateImageTest(IFormFile image)
-        {
-            using var stream = image.OpenReadStream();
-
-            var uploadParams = new ImageUploadParams
-            {
-                File = new FileDescription(image.FileName, stream),
-                Folder = $"DocShare/users/test",
-                Transformation = new Transformation()
-                    .Width(250)
-                    .Height(250)
-                    .Crop("auto")
-                    .Gravity("auto")
-                    .AspectRatio(1.0)
-            };
-
-            var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
-
-            if (uploadResult.Error != null)
-                return StatusCode(500, uploadResult.Error.Message);
-
-            return Ok(new
-            {
-                success = uploadResult.StatusCode,
             });
         }
 

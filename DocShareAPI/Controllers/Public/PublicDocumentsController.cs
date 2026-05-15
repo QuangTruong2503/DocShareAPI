@@ -93,6 +93,13 @@ namespace DocShareAPI.Controllers.Public
         [HttpGet("search-documents")]
         public async Task<IActionResult> SearchDocuments([FromQuery] PaginationParams paginationParams, [FromQuery] string search)
         {
+            if (string.IsNullOrWhiteSpace(search))
+            {
+                return BadRequest(new { message = "Search query is required." });
+            }
+
+            var normalizedSearch = search.Trim().ToLower();
+
             var query = from document in _context.DOCUMENTS
                         join user in _context.USERS on document.user_id equals user.user_id
                         join docCate in _context.DOCUMENT_CATEGORIES on document.document_id equals docCate.document_id into docCateGroup
@@ -110,10 +117,11 @@ namespace DocShareAPI.Controllers.Public
                         select new { document, user, category, tag };
 
             var documents = await query
-                .Where(q => q.document.Title.ToLower().Contains(search.ToLower())
-                    || q.category.Name.ToLower().Contains(search.ToLower())
-                    || q.tag.Name.ToLower().Contains(search.ToLower())
-                    || (q.document.Description != null && q.document.Description.ToLower().Contains(search.ToLower())))
+                .Where(q => q.document.is_public &&
+                    (q.document.Title.ToLower().Contains(normalizedSearch)
+                    || (q.category != null && q.category.Name.ToLower().Contains(normalizedSearch))
+                    || (q.tag != null && q.tag.Name.ToLower().Contains(normalizedSearch))
+                    || (q.document.Description != null && q.document.Description.ToLower().Contains(normalizedSearch))))
                 .Select(q => new
                 {
                     q.document.document_id,

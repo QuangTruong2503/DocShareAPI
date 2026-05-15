@@ -459,13 +459,59 @@ namespace DocShareAPI.Controllers.Auth
                 return false;
             }
 
-            if (!_allowedDocumentTypes.Contains(file.ContentType))
+            if (!_allowedDocumentTypes.Any(t => string.Equals(t, file.ContentType, StringComparison.OrdinalIgnoreCase)))
             {
                 validationMessage = $"Invalid document type: {file.ContentType}. Allowed types are: PDF, DOCX, TXT.";
                 return false;
             }
 
+            var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+            var allowedExtensions = new[] { ".pdf", ".doc", ".docx", ".txt" };
+            if (!allowedExtensions.Contains(extension))
+            {
+                validationMessage = "Invalid document extension. Allowed extensions are: PDF, DOC, DOCX, TXT.";
+                return false;
+            }
+
+            if (!HasValidFileSignature(file, extension))
+            {
+                validationMessage = "Document content does not match the uploaded file type.";
+                return false;
+            }
+
             return true;
+        }
+
+        private static bool HasValidFileSignature(IFormFile file, string extension)
+        {
+            using var stream = file.OpenReadStream();
+            var header = new byte[8];
+            var bytesRead = stream.Read(header, 0, header.Length);
+
+            return extension switch
+            {
+                ".pdf" => bytesRead >= 4
+                    && header[0] == 0x25
+                    && header[1] == 0x50
+                    && header[2] == 0x44
+                    && header[3] == 0x46,
+                ".docx" => bytesRead >= 4
+                    && header[0] == 0x50
+                    && header[1] == 0x4B
+                    && header[2] == 0x03
+                    && header[3] == 0x04,
+                ".doc" => bytesRead >= 8
+                    && header[0] == 0xD0
+                    && header[1] == 0xCF
+                    && header[2] == 0x11
+                    && header[3] == 0xE0
+                    && header[4] == 0xA1
+                    && header[5] == 0xB1
+                    && header[6] == 0x1A
+                    && header[7] == 0xE1,
+                ".txt" => bytesRead > 0 && !header.Take(bytesRead).Contains((byte)0x00),
+                _ => false
+            };
         }
         //Upload tài liêu
         private async Task<ImageUploadResult> UploadToCloudinary(IFormFile file)
