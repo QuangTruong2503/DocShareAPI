@@ -1,7 +1,9 @@
 ﻿using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
+using DocShareAPI.Models;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -34,10 +36,33 @@ namespace DocShareAPI.Controllers.Public
         [HttpGet("gemini/document-summary")]
         public async Task<IActionResult> SummarizeDocument([FromQuery] int documentId)
         {
-            // 1. Truy vấn document từ DB
-            var document = await _context.DOCUMENTS.FindAsync(documentId);
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+
+            var document = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Where(d => d.document_id == documentId)
+                .Select(d => new
+                {
+                    d.document_id,
+                    d.user_id,
+                    d.Title,
+                    d.file_url,
+                    d.is_public
+                })
+                .FirstOrDefaultAsync();
+
             if (document == null)
                 return NotFound("Document not found.");
+
+            if (!document.is_public)
+            {
+                if (decodedToken == null)
+                    return Unauthorized(new { message = "Login required to summarize this document." });
+
+                bool canAccess = decodedToken.userID == document.user_id || decodedToken.roleID == "admin";
+                if (!canAccess)
+                    return Forbid();
+            }
 
             if (string.IsNullOrEmpty(document.file_url))
                 return BadRequest("Document URL is missing.");

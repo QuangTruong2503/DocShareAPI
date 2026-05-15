@@ -44,16 +44,30 @@ namespace DocShareAPI.Controllers.Auth
         [HttpGet("documents")]
         public async Task<ActionResult> GetAllDocuments([FromQuery] PaginationParams paginationParams)
         {
-            var query = _context.DOCUMENTS.AsQueryable();
+            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedTokenResponse == null)
+            {
+                return Unauthorized();
+            }
+
+            if (decodedTokenResponse.roleID != "admin")
+            {
+                return Forbid();
+            }
+
+            var query = _context.DOCUMENTS.AsNoTracking();
             var pagedData = await query
+                .OrderByDescending(d => d.uploaded_at)
                 .Select(d => new
                 {
                     d.document_id,
                     full_name = d.Users != null ? d.Users.full_name : string.Empty,
                     d.Title,
+                    d.Description,
                     d.thumbnail_url,
                     d.is_public,
-                    d.public_id
+                    d.uploaded_at,
+                    d.download_count
                 })
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
 
@@ -83,7 +97,8 @@ namespace DocShareAPI.Controllers.Auth
                 return Unauthorized();
             }
 
-            var query = _context.DOCUMENTS.AsQueryable()
+            var query = _context.DOCUMENTS
+                .AsNoTracking()
                 .Where(d => d.user_id == decodedTokenResponse.userID);
             if (isPublic != null)
             {
@@ -92,9 +107,9 @@ namespace DocShareAPI.Controllers.Auth
             // Apply sorting
             query = sortBy.ToLower() switch
             {
-                "date" => query.OrderBy(d => d.uploaded_at),
+                "date" => query.OrderByDescending(d => d.uploaded_at),
                 "title" => query.OrderBy(d => d.Title),
-                _ => query.OrderBy(d => d.uploaded_at) // Default to sort by date descending
+                _ => query.OrderByDescending(d => d.uploaded_at)
             };
             var pageData = await query
                 .Select(d => new
@@ -201,7 +216,7 @@ namespace DocShareAPI.Controllers.Auth
                     newDoc.document_id,
                     newDoc.Title,
                     newDoc.thumbnail_url,
-                    uploadResult
+                    newDoc.file_url
                 });
             }
             catch (Exception ex)
@@ -234,7 +249,7 @@ namespace DocShareAPI.Controllers.Auth
                 }
                 if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
                 {
-                    return BadRequest(new { message = "You are not the owner of this document or an admin" });
+                    return Forbid();
                 }
                 document.Title = documentUpdate.title;
                 document.Description = documentUpdate.description;
@@ -242,7 +257,15 @@ namespace DocShareAPI.Controllers.Auth
                 await _context.SaveChangesAsync();
                 return Ok(new
                 {
-                    data = document,
+                    data = new
+                    {
+                        document.document_id,
+                        document.Title,
+                        document.Description,
+                        document.thumbnail_url,
+                        document.uploaded_at,
+                        document.is_public
+                    },
                     message = "Document updated successfully",
                     success = true
                 });
@@ -273,7 +296,7 @@ namespace DocShareAPI.Controllers.Auth
 
             if (document == null)
             {
-                return BadRequest(new
+                return NotFound(new
                 {
                     message = "Document not found or you don't have permission!"
                 });
@@ -380,12 +403,12 @@ namespace DocShareAPI.Controllers.Auth
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
             if (document == null)
             {
-                return BadRequest(new { message = "Document not found" });
+                return NotFound(new { message = "Document not found" });
             }
 
             if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
             {
-                return BadRequest(new { message = "You are not the owner of this document or an admin" });
+                return Forbid();
             }
 
             var result = await DeleteFromCloudinary(document.public_id);
@@ -420,6 +443,16 @@ namespace DocShareAPI.Controllers.Auth
                 {
                     return NotFound($"No document found with ID: {documentID}");
                 }
+
+                bool canDownload = document.is_public ||
+                    document.user_id == decodedTokenResponse.userID ||
+                    decodedTokenResponse.roleID == "admin";
+
+                if (!canDownload)
+                {
+                    return Forbid();
+                }
+
                 var result = await _cloudinaryService.Cloudinary.GetResourceByAssetIdAsync(document.asset_id);
                 if (result == null || string.IsNullOrEmpty(result.SecureUrl))
                 {

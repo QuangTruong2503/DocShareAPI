@@ -1,5 +1,4 @@
 ﻿using System.Net.Http.Headers;
-using System.Reflection.Emit;
 using System.Text;
 using System.Text.Json;
 
@@ -22,7 +21,8 @@ namespace DocShareAPI.Services.EmailServices
         public async Task SendTwoFactorCodeAsync(
             string toEmail,
             string recipientName,
-            string twoFactorCode)
+            string twoFactorCode,
+            string requestName)
         {
             var apiKey =
                 Environment.GetEnvironmentVariable("RESEND_API_KEY")
@@ -53,6 +53,9 @@ namespace DocShareAPI.Services.EmailServices
             if (string.IsNullOrWhiteSpace(domain))
                 throw new ArgumentNullException(nameof(domain));
 
+            if (string.IsNullOrWhiteSpace(requestName))
+                throw new ArgumentNullException(nameof(requestName));
+
 
             var payload = new
             {
@@ -67,6 +70,7 @@ namespace DocShareAPI.Services.EmailServices
                     {
                         app_name = appName,
                         user_name = recipientName,
+                        request_name = requestName,
                         otp_code = twoFactorCode,
                         expire_time = "3 phút"
                     }

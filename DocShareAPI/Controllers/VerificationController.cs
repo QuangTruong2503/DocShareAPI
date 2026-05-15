@@ -1,6 +1,8 @@
 using DocShareAPI.Data;
 using DocShareAPI.EmailServices;
+using DocShareAPI.Helpers;
 using DocShareAPI.Models;
+using DocShareAPI.Services.EmailServices;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,12 +18,18 @@ namespace DocShareAPI.Controllers
         private readonly DocShareDbContext _context;
         private readonly VerifyEmailService _verifyEmailService;
         private readonly ResetPasswordEmailService _resetPasswordEmailService;
+        private readonly ITwoFactorEmailService _twoFactorEmailService;
 
-        public VerificationController(DocShareDbContext context, VerifyEmailService verifyEmailService, ResetPasswordEmailService resetPasswordEmailService)
+        public VerificationController(
+            DocShareDbContext context,
+            VerifyEmailService verifyEmailService,
+            ResetPasswordEmailService resetPasswordEmailService,
+            ITwoFactorEmailService twoFactorEmailService)
         {
             _context = context;
             _verifyEmailService = verifyEmailService;
             _resetPasswordEmailService = resetPasswordEmailService;
+            _twoFactorEmailService = twoFactorEmailService;
         }
         //Kiểm tra người dùng đã xác thực
         [HttpGet("check-user-verified")]
@@ -158,6 +166,276 @@ namespace DocShareAPI.Controllers
             return Ok(new { message = "Email đã được xác thực thành công." });
         }
 
+        [HttpPost("change-email/request-current-verification")]
+        public async Task<IActionResult> RequestCurrentEmailVerification()
+        {
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized(new { message = "Bạn cần đăng nhập để đổi email.", success = false });
+            }
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
+            if (user == null)
+            {
+                return NotFound(new { message = "Không tìm thấy người dùng.", success = false });
+            }
+
+            await DeactivateEmailChangeTokens(user.user_id);
+
+            var code = GenerateRandomCode.GenerateTwoFactorCode();
+            var tokenRecord = new Tokens
+            {
+                token_id = Guid.NewGuid(),
+                user_id = user.user_id,
+                token = TokenHasher.HashToken(code),
+                type = TokenType.EmailChangeCurrentVerification,
+                is_active = true,
+                created_at = DateTime.UtcNow,
+                expires_at = DateTime.UtcNow.AddMinutes(5)
+            };
+
+            _context.TOKENS.Add(tokenRecord);
+            await _context.SaveChangesAsync();
+
+            try
+            {
+                await _twoFactorEmailService.SendTwoFactorCodeAsync(
+                    toEmail: user.Email,
+                    recipientName: user.full_name ?? user.Username,
+                    twoFactorCode: code,
+                    requestName: "Đổi email");
+            }
+            catch (Exception ex)
+            {
+                tokenRecord.is_active = false;
+                await _context.SaveChangesAsync();
+                return StatusCode(500, new { message = "Không thể gửi mã xác thực đến email hiện tại.", error = ex.Message, success = false });
+            }
+
+            return Ok(new
+            {
+                message = "Mã xác thực đã được gửi đến email hiện tại.",
+                success = true,
+                currentEmail = MaskEmail(user.Email),
+                expiresIn = 300,
+                nextApi = new
+                {
+                    method = "POST",
+                    url = "/api/Verification/change-email/verify-current",
+                    body = new { code = "123456" }
+                }
+            });
+        }
+
+        [HttpPost("change-email/verify-current")]
+        public async Task<IActionResult> VerifyCurrentEmailForChange([FromBody] VerifyCurrentEmailChangeRequest request)
+        {
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized(new { message = "Bạn cần đăng nhập để đổi email.", success = false });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Code))
+            {
+                return BadRequest(new { message = "Mã xác thực không hợp lệ.", success = false });
+            }
+
+            var hashedCode = TokenHasher.HashToken(request.Code);
+            var tokenRecord = await _context.TOKENS
+                .FirstOrDefaultAsync(t =>
+                    t.user_id == decodedToken.userID &&
+                    t.token == hashedCode &&
+                    t.type == TokenType.EmailChangeCurrentVerification &&
+                    t.is_active &&
+                    t.expires_at > DateTime.UtcNow);
+
+            if (tokenRecord == null)
+            {
+                return BadRequest(new { message = "Mã xác thực không đúng hoặc đã hết hạn.", success = false });
+            }
+
+            tokenRecord.is_active = false;
+            await DeactivateEmailChangeTokens(decodedToken.userID, TokenType.EmailChangeCurrentVerified);
+
+            var currentEmailVerifiedToken = GenerateRandomToken();
+            _context.TOKENS.Add(new Tokens
+            {
+                token_id = Guid.NewGuid(),
+                user_id = decodedToken.userID,
+                token = TokenHasher.HashToken(currentEmailVerifiedToken),
+                type = TokenType.EmailChangeCurrentVerified,
+                is_active = true,
+                created_at = DateTime.UtcNow,
+                expires_at = DateTime.UtcNow.AddMinutes(10)
+            });
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Email hiện tại đã được xác thực. Bạn có thể nhập email mới.",
+                success = true,
+                currentEmailVerifiedToken,
+                expiresIn = 600,
+                nextApi = new
+                {
+                    method = "POST",
+                    url = "/api/Verification/change-email/request-new-email-confirmation",
+                    body = new
+                    {
+                        currentEmailVerifiedToken = currentEmailVerifiedToken,
+                        newEmail = "new-email@example.com"
+                    }
+                }
+            });
+        }
+
+        [HttpPost("change-email/request-new-email-confirmation")]
+        public async Task<IActionResult> RequestNewEmailConfirmation([FromBody] RequestNewEmailConfirmationRequest request)
+        {
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized(new { message = "Bạn cần đăng nhập để đổi email.", success = false });
+            }
+
+            var newEmail = NormalizeEmail(request.NewEmail);
+            if (string.IsNullOrWhiteSpace(request.CurrentEmailVerifiedToken) || string.IsNullOrWhiteSpace(newEmail) || !IsValidEmail(newEmail))
+            {
+                return BadRequest(new { message = "Dữ liệu đổi email không hợp lệ.", success = false });
+            }
+
+            var verifiedTokenHash = TokenHasher.HashToken(request.CurrentEmailVerifiedToken);
+            var verifiedTokenRecord = await _context.TOKENS
+                .FirstOrDefaultAsync(t =>
+                    t.user_id == decodedToken.userID &&
+                    t.token == verifiedTokenHash &&
+                    t.type == TokenType.EmailChangeCurrentVerified &&
+                    t.is_active &&
+                    t.expires_at > DateTime.UtcNow);
+
+            if (verifiedTokenRecord == null)
+            {
+                return BadRequest(new { message = "Phiên xác thực email hiện tại không hợp lệ hoặc đã hết hạn.", success = false });
+            }
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
+            if (user == null)
+            {
+                return NotFound(new { message = "Không tìm thấy người dùng.", success = false });
+            }
+
+            if (string.Equals(user.Email, newEmail, StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Email mới phải khác email hiện tại.", success = false });
+            }
+
+            var emailExists = await _context.USERS.AnyAsync(u => u.Email == newEmail);
+            if (emailExists)
+            {
+                return BadRequest(new { message = "Email mới đã được sử dụng.", success = false });
+            }
+
+            await DeactivateEmailChangeTokens(user.user_id, TokenType.EmailChangeConfirmation);
+
+            var confirmationToken = GenerateRandomToken();
+            var confirmationTokenRecord = new Tokens
+            {
+                token_id = Guid.NewGuid(),
+                user_id = user.user_id,
+                token = TokenHasher.HashToken(confirmationToken),
+                type = TokenType.EmailChangeConfirmation,
+                is_active = true,
+                user_device = newEmail,
+                created_at = DateTime.UtcNow,
+                expires_at = DateTime.UtcNow.AddMinutes(10)
+            };
+
+            _context.TOKENS.Add(confirmationTokenRecord);
+            await _context.SaveChangesAsync();
+
+            try
+            {
+                await _verifyEmailService.SendChangeEmailConfirmationAsync(
+                    toEmail: newEmail,
+                    recipientName: user.full_name ?? user.Username,
+                    verifyToken: confirmationToken);
+            }
+            catch (Exception ex)
+            {
+                confirmationTokenRecord.is_active = false;
+                await _context.SaveChangesAsync();
+                return StatusCode(500, new { message = "Không thể gửi email xác nhận đến email mới.", error = ex.Message, success = false });
+            }
+
+            return Ok(new
+            {
+                message = "Email xác nhận đã được gửi đến email mới. Vui lòng kiểm tra và kích hoạt.",
+                success = true,
+                pendingEmail = MaskEmail(newEmail),
+                expiresIn = 600,
+                confirmApi = new
+                {
+                    method = "GET",
+                    url = "/api/Verification/public/confirm-change-email?token={token_from_email}"
+                }
+            });
+        }
+
+        [HttpGet("public/confirm-change-email")]
+        public async Task<IActionResult> ConfirmChangeEmail([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return BadRequest(new { message = "Token không hợp lệ.", success = false });
+            }
+
+            var hashedToken = TokenHasher.HashToken(token);
+            var tokenRecord = await _context.TOKENS
+                .FirstOrDefaultAsync(t =>
+                    t.token == hashedToken &&
+                    t.type == TokenType.EmailChangeConfirmation &&
+                    t.is_active &&
+                    t.expires_at > DateTime.UtcNow);
+
+            if (tokenRecord == null || string.IsNullOrWhiteSpace(tokenRecord.user_device))
+            {
+                return BadRequest(new { message = "Token đổi email không hợp lệ hoặc đã hết hạn.", success = false });
+            }
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == tokenRecord.user_id);
+            if (user == null)
+            {
+                return NotFound(new { message = "Không tìm thấy người dùng.", success = false });
+            }
+
+            var newEmail = NormalizeEmail(tokenRecord.user_device);
+            var emailExists = await _context.USERS.AnyAsync(u => u.Email == newEmail && u.user_id != user.user_id);
+            if (emailExists)
+            {
+                tokenRecord.is_active = false;
+                await _context.SaveChangesAsync();
+                return BadRequest(new { message = "Email mới đã được sử dụng bởi tài khoản khác.", success = false });
+            }
+
+            var oldEmail = user.Email;
+            user.Email = newEmail;
+            user.is_verified = true;
+
+            await DeactivateEmailChangeTokens(user.user_id);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Đổi email thành công.",
+                success = true,
+                oldEmail = MaskEmail(oldEmail),
+                email = user.Email
+            });
+        }
+
 
         //Tạo token reset password
         [HttpPost("public/generate-reset-password-token")]
@@ -286,6 +564,72 @@ namespace DocShareAPI.Controllers
             public required string token { get; set; }
             public required string newPassword { get; set; }
         }
+
+        public class VerifyCurrentEmailChangeRequest
+        {
+            public required string Code { get; set; }
+        }
+
+        public class RequestNewEmailConfirmationRequest
+        {
+            public required string CurrentEmailVerifiedToken { get; set; }
+            public required string NewEmail { get; set; }
+        }
+
+        private async Task DeactivateEmailChangeTokens(Guid userId, params TokenType[] tokenTypes)
+        {
+            var types = tokenTypes.Length > 0
+                ? tokenTypes
+                : new[]
+                {
+                    TokenType.EmailChangeCurrentVerification,
+                    TokenType.EmailChangeCurrentVerified,
+                    TokenType.EmailChangeConfirmation
+                };
+
+            var tokens = await _context.TOKENS
+                .Where(t => t.user_id == userId && types.Contains(t.type) && t.is_active)
+                .ToListAsync();
+
+            foreach (var token in tokens)
+            {
+                token.is_active = false;
+            }
+        }
+
+        private static string NormalizeEmail(string? email)
+        {
+            return email?.Trim().ToLowerInvariant() ?? string.Empty;
+        }
+
+        private static bool IsValidEmail(string email)
+        {
+            try
+            {
+                var address = new System.Net.Mail.MailAddress(email);
+                return address.Address == email;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string MaskEmail(string email)
+        {
+            var parts = email.Split('@');
+            if (parts.Length != 2)
+            {
+                return email;
+            }
+
+            var name = parts[0];
+            var domain = parts[1];
+            var visibleName = name.Length <= 2 ? name[..1] : name[..2];
+
+            return $"{visibleName}***@{domain}";
+        }
+
         private string GenerateRandomToken()
         {
             var tokenData = new byte[128];

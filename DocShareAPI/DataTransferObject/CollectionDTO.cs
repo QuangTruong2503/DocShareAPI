@@ -6,4 +6,9 @@
         public string? Description { get; set; }
         public bool is_public { get; set; }
     }
+
+    public class CollectionDocumentDTO
+    {
+        public int document_id { get; set; }
+    }
 }

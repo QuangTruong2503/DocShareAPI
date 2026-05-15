@@ -24,6 +24,31 @@ namespace DocShareAPI.EmailServices
             string recipientName,
             string verifyToken)
         {
+            await SendTemplateEmailAsync(
+                toEmail,
+                recipientName,
+                verifyToken,
+                "verify-email");
+        }
+
+        public async Task SendChangeEmailConfirmationAsync(
+            string toEmail,
+            string recipientName,
+            string verifyToken)
+        {
+            await SendTemplateEmailAsync(
+                toEmail,
+                recipientName,
+                verifyToken,
+                "change-email/confirm");
+        }
+
+        private async Task SendTemplateEmailAsync(
+            string toEmail,
+            string recipientName,
+            string verifyToken,
+            string verifyPath)
+        {
             var apiKey =
                 Environment.GetEnvironmentVariable("RESEND_API_KEY")
                 ?? _configuration["Resend:ApiKey"];
@@ -53,7 +78,7 @@ namespace DocShareAPI.EmailServices
             if (string.IsNullOrWhiteSpace(domain))
                 throw new ArgumentNullException(nameof(domain));
 
-            string verifyLink = $"{domain}/verify-email/{verifyToken}";
+            string verifyLink = $"{domain.TrimEnd('/')}/{verifyPath.Trim('/')}/{verifyToken}";
 
             var payload = new
             {

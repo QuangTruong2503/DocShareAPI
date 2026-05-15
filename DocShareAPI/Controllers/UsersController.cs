@@ -85,6 +85,7 @@ namespace DocShareAPI.Controllers
                 return Ok(new
                 {
                     message = "Email và mật khẩu không được để trống.",
+                    success = false,
                     isLogin = false
                 });
             }
@@ -99,6 +100,7 @@ namespace DocShareAPI.Controllers
                     return Ok(new
                     {
                         message = "Tài khoản hoặc email không tồn tại.",
+                        success = false,
                         isLogin = false
                     });
                 }
@@ -108,6 +110,7 @@ namespace DocShareAPI.Controllers
                     return Ok(new
                     {
                         message = "Mật khẩu không chính xác.",
+                        success = false,
                         isLogin = false
                     });
                 }
@@ -136,7 +139,7 @@ namespace DocShareAPI.Controllers
 
                     // Gửi mã 2FA (tùy vào phương thức)
                     string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode(); // Tạo mã 6 số
-                    await SendTwoFactorCode(user, twoFactorCode); // Gửi qua email/SMS/app
+                    await SendTwoFactorCode(user, twoFactorCode, "Đăng nhập"); // Gửi qua email/SMS/app
 
                     // Lưu mã 2FA vào cache hoặc database (có thời hạn)
                     await SaveTwoFactorCode(user.user_id, twoFactorCode);
@@ -144,6 +147,7 @@ namespace DocShareAPI.Controllers
                     return Ok(new
                     {
                         message = "Yêu cầu xác thực 2FA",
+                        success = true,
                         isLogin = false,
                         require2FA = true,
                         twoFactorMethod = user.two_factor_method.ToString(),
@@ -189,12 +193,7 @@ namespace DocShareAPI.Controllers
                     success = true,
                     isLogin = true,
                     token,
-                    user = new
-                    {
-                        Email = user.Email,
-                        FullName = user.full_name,
-                        AvatarUrl = user.avatar_url
-                    }
+                    user = BuildUserResponse(user)
                 });
             }
             catch (Exception ex)
@@ -293,12 +292,7 @@ namespace DocShareAPI.Controllers
                     success = true,
                     isLogin = true,
                     token = accessToken,
-                    user = new
-                    {
-                        Email = user.Email,
-                        FullName = user.full_name,
-                        AvatarUrl = user.avatar_url
-                    }
+                    user = BuildUserResponse(user)
                 });
             }
             catch (Exception ex)
@@ -368,7 +362,7 @@ namespace DocShareAPI.Controllers
                     return Ok(new { message = "Không tìm thấy người dùng", success = false });
                 }
 
-                await SendTwoFactorCode(user, newCode);
+                await SendTwoFactorCode(user, newCode, "Đăng nhập");
 
                 // Lưu mã mới (invalidate cũ tự động nếu bạn dùng TTL hoặc overwrite)
                 await SaveTwoFactorCode(tempTokenEntity.user_id, newCode);
@@ -438,7 +432,7 @@ namespace DocShareAPI.Controllers
 
             // Tạo và gửi mã 2FA
             string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode();
-            await SendTwoFactorCode(user, twoFactorCode);
+            await SendTwoFactorCode(user, twoFactorCode, "Bật xác thực hai yếu tố");
             await SaveTwoFactorCode(user.user_id, twoFactorCode);
 
             return Ok(new
@@ -628,13 +622,9 @@ namespace DocShareAPI.Controllers
             {
                 success = true,
                 message = "Đăng nhập Google thành công",
+                isLogin = true,
                 token = accessToken,
-                user = new
-                {
-                    user.Email,
-                    FullName = user.full_name,
-                    AvatarUrl = user.avatar_url
-                }
+                user = BuildUserResponse(user)
             });
         }
 
@@ -790,12 +780,8 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                user = new
-                {
-                    fullName = user.full_name,
-                    email = user.Email,
-                    avatar = user.avatar_url
-                }
+                message = "Cập nhật ảnh đại diện thành công",
+                user = BuildUserResponse(user)
             });
         }
 
@@ -843,12 +829,7 @@ namespace DocShareAPI.Controllers
             {
                 success = true,
                 message = "Cập nhật thông tin thành công",
-                user = new
-                {
-                    fullName = user.full_name,
-                    email = user.Email,
-                    avatar = user.avatar_url
-                }
+                user = BuildUserResponse(user)
             });
         }
 
@@ -866,8 +847,24 @@ namespace DocShareAPI.Controllers
                 return false;
             }
         }
+
+        private static object BuildUserResponse(Users user)
+        {
+            return new
+            {
+                userId = user.user_id,
+                username = user.Username,
+                email = user.Email,
+                fullName = user.full_name,
+                avatarUrl = user.avatar_url,
+                role = user.Role,
+                isVerified = user.is_verified,
+                twoFactorEnabled = user.two_factor_enabled
+            };
+        }
+
         // Gửi mã 2FA
-        private async Task SendTwoFactorCode(Users user, string code)
+        private async Task SendTwoFactorCode(Users user, string code, string requestName)
         {
             switch (user.two_factor_method)
             {
@@ -876,7 +873,8 @@ namespace DocShareAPI.Controllers
                     await _emailService.SendTwoFactorCodeAsync(
                         toEmail: user.Email,
                         recipientName: user.full_name ?? user.Username,
-                        twoFactorCode: code
+                        twoFactorCode: code,
+                        requestName: requestName
                         );
                     break;
                     //case TwoFactorMethod.SMS:

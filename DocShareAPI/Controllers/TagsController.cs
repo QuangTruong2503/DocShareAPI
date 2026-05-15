@@ -19,18 +19,25 @@ namespace DocShareAPI.Controllers
         [HttpGet("public/get-all-tags")]
         public async Task<IActionResult> GetAllTags()
         {
-            var tags = await _context.TAGS.Select(t => new {t.tag_id, t.Name}).ToListAsync();
-            if (tags == null)
-            {
-                return NotFound();
-            }
+            var tags = await _context.TAGS
+                .AsNoTracking()
+                .Select(t => new { t.tag_id, t.Name })
+                .ToListAsync();
             return Ok(tags);
         }
         //Lấy danh sách dựa vào search tên category
         [HttpGet("public/search-tags")]
         public async Task<IActionResult> SearchTags(string search)
         {
-            var categories = await _context.TAGS.Where(c => c.Name.Contains(search)).Select(c => new { c.tag_id, c.Name }).ToListAsync();
+            if (string.IsNullOrWhiteSpace(search))
+                return BadRequest(new { message = "Search query is required." });
+
+            var normalizedSearch = search.Trim();
+            var categories = await _context.TAGS
+                .AsNoTracking()
+                .Where(c => c.Name.Contains(normalizedSearch))
+                .Select(c => new { c.tag_id, c.Name })
+                .ToListAsync();
             return Ok(categories);
         }
 
