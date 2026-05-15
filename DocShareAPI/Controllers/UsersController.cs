@@ -85,6 +85,7 @@ namespace DocShareAPI.Controllers
                 return Ok(new
                 {
                     message = "Email và mật khẩu không được để trống.",
+                    success = false,
                     isLogin = false
                 });
             }
@@ -99,6 +100,7 @@ namespace DocShareAPI.Controllers
                     return Ok(new
                     {
                         message = "Tài khoản hoặc email không tồn tại.",
+                        success = false,
                         isLogin = false
                     });
                 }
@@ -108,6 +110,7 @@ namespace DocShareAPI.Controllers
                     return Ok(new
                     {
                         message = "Mật khẩu không chính xác.",
+                        success = false,
                         isLogin = false
                     });
                 }
@@ -136,7 +139,7 @@ namespace DocShareAPI.Controllers
 
                     // Gửi mã 2FA (tùy vào phương thức)
                     string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode(); // Tạo mã 6 số
-                    await SendTwoFactorCode(user, twoFactorCode); // Gửi qua email/SMS/app
+                    await SendTwoFactorCode(user, twoFactorCode, "Đăng nhập"); // Gửi qua email/SMS/app
 
                     // Lưu mã 2FA vào cache hoặc database (có thời hạn)
                     await SaveTwoFactorCode(user.user_id, twoFactorCode);
@@ -144,6 +147,7 @@ namespace DocShareAPI.Controllers
                     return Ok(new
                     {
                         message = "Yêu cầu xác thực 2FA",
+                        success = true,
                         isLogin = false,
                         require2FA = true,
                         twoFactorMethod = user.two_factor_method.ToString(),
@@ -189,12 +193,7 @@ namespace DocShareAPI.Controllers
                     success = true,
                     isLogin = true,
                     token,
-                    user = new
-                    {
-                        Email = user.Email,
-                        FullName = user.full_name,
-                        AvatarUrl = user.avatar_url
-                    }
+                    user = BuildUserResponse(user)
                 });
             }
             catch (Exception ex)
@@ -258,6 +257,15 @@ namespace DocShareAPI.Controllers
 
                 // Tạo access token chính thức
                 var user = tempTokenEntity.Users;
+                if (user == null)
+                {
+                    return Ok(new
+                    {
+                        message = "Phiên xác thực không hợp lệ",
+                        success = false
+                    });
+                }
+
                 var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
                 var hashedAccessToken = TokenHasher.HashToken(accessToken);
 
@@ -284,12 +292,7 @@ namespace DocShareAPI.Controllers
                     success = true,
                     isLogin = true,
                     token = accessToken,
-                    user = new
-                    {
-                        Email = user.Email,
-                        FullName = user.full_name,
-                        AvatarUrl = user.avatar_url
-                    }
+                    user = BuildUserResponse(user)
                 });
             }
             catch (Exception ex)
@@ -354,7 +357,12 @@ namespace DocShareAPI.Controllers
 
                 // Gửi lại
                 var user = await _context.USERS.FindAsync(tempTokenEntity.user_id);
-                await SendTwoFactorCode(user, newCode);
+                if (user == null)
+                {
+                    return Ok(new { message = "Không tìm thấy người dùng", success = false });
+                }
+
+                await SendTwoFactorCode(user, newCode, "Đăng nhập");
 
                 // Lưu mã mới (invalidate cũ tự động nếu bạn dùng TTL hoặc overwrite)
                 await SaveTwoFactorCode(tempTokenEntity.user_id, newCode);
@@ -424,7 +432,7 @@ namespace DocShareAPI.Controllers
 
             // Tạo và gửi mã 2FA
             string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode();
-            await SendTwoFactorCode(user, twoFactorCode);
+            await SendTwoFactorCode(user, twoFactorCode, "Bật xác thực hai yếu tố");
             await SaveTwoFactorCode(user.user_id, twoFactorCode);
 
             return Ok(new
@@ -464,7 +472,7 @@ namespace DocShareAPI.Controllers
                         t.is_active &&
                         t.expires_at > DateTime.UtcNow);
 
-                if (tempTokenEntity == null)
+                if (tempTokenEntity == null || tempTokenEntity.Users == null)
                 {
                     return Ok(new
                     {
@@ -488,8 +496,8 @@ namespace DocShareAPI.Controllers
 
                 // === Bật 2FA thành công ===
                 user.two_factor_enabled = true;
-                // Nếu sau này hỗ trợ nhiều method thì có thể set ở đây
-                // user.two_factor_method = TwoFactorMethod.Email; // hoặc từ request nếu cho chọn
+                user.two_factor_method = TwoFactorMethod.Email;
+                user.two_factor_verified_at = DateTime.UtcNow;
 
                 // Vô hiệu hóa temp token
                 tempTokenEntity.is_active = false;
@@ -614,13 +622,9 @@ namespace DocShareAPI.Controllers
             {
                 success = true,
                 message = "Đăng nhập Google thành công",
+                isLogin = true,
                 token = accessToken,
-                user = new
-                {
-                    user.Email,
-                    FullName = user.full_name,
-                    AvatarUrl = user.avatar_url
-                }
+                user = BuildUserResponse(user)
             });
         }
 
@@ -634,7 +638,23 @@ namespace DocShareAPI.Controllers
             {
                 return Unauthorized();
             }
-            var tokenEntity = await _context.TOKENS.FirstOrDefaultAsync(t => t.token == token);
+
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return BadRequest(new
+                {
+                    message = "Token không hợp lệ",
+                    success = false
+                });
+            }
+
+            var hashedToken = TokenHasher.HashToken(token);
+            var tokenEntity = await _context.TOKENS.FirstOrDefaultAsync(t =>
+                t.token == hashedToken &&
+                t.user_id == decodedToken.userID &&
+                t.type == TokenType.Access &&
+                t.is_active);
+
             if (tokenEntity == null)
             {
                 return Ok(new
@@ -643,12 +663,9 @@ namespace DocShareAPI.Controllers
                     success = true //vẫn đăng xuất nếu token không tồn tại
                 });
             }
-            await Task.Run(() =>
-            {
-                tokenEntity.is_active = false;
-                _context.TOKENS.Update(tokenEntity);
-                _context.SaveChanges();
-            });
+
+            tokenEntity.is_active = false;
+            await _context.SaveChangesAsync();
 
             return Ok(new
             {
@@ -702,74 +719,72 @@ namespace DocShareAPI.Controllers
 
         }
 
-        //Cập nhật hình ảnh
-        [HttpPut("update-image")]
+        //Cập nhật hình ảnh đại diện
+        [HttpPut("update-avatar")]
         public async Task<IActionResult> UpdateImage(IFormFile image)
         {
-            //Kiểm tra token
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedToken == null)
             {
                 return Unauthorized();
             }
-            try
+
+            if (image == null || image.Length == 0)
+                return BadRequest("Không có ảnh được upload");
+
+            var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp", "image/jpg" };
+            if (!allowedTypes.Contains(image.ContentType))
+                return BadRequest("Định dạng ảnh không hợp lệ");
+
+            if (image.Length > 3 * 1024 * 1024)
+                return BadRequest("Ảnh không được vượt quá 3MB");
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
+            if (user == null)
+                return BadRequest("Không tìm thấy người dùng");
+
+            using var stream = image.OpenReadStream();
+
+            var uploadParams = new ImageUploadParams
             {
-                //Tìm userID
-                var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
-                if (user == null)
-                {
-                    return BadRequest(new
+                File = new FileDescription(image.FileName, stream),
+                Folder = $"DocShare/users/{user.user_id}",
+                Transformation = new Transformation()
+                    .Width(250)
+                    .Height(250)
+                    .Crop("auto")
+                    .Gravity("auto")
+                    .AspectRatio(1.0)
+            };
+
+            var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
+
+            if (uploadResult.Error != null)
+                return StatusCode(500, uploadResult.Error.Message);
+
+            if (!string.IsNullOrEmpty(user.avatar_public_id))
+            {
+                await _cloudinaryService.Cloudinary.DeleteResourcesAsync(
+                    new DelResParams
                     {
-                        message = "Không tìm thấy người dùng",
-                        success = false
+                        PublicIds = new List<string> { user.avatar_public_id },
+                        ResourceType = ResourceType.Image
                     });
-                }
-                if (image == null || image.Length == 0)
-                {
-                    _logger.LogWarning("Image upload attempted with null or empty image");
-                    return BadRequest("No image uploaded or image is empty");
-                }
-                using (var stream = image.OpenReadStream())
-                {
-                    try
-                    {
-
-                        var uploadParams = new ImageUploadParams
-                        {
-                            File = new FileDescription(image.FileName, stream),
-                            Folder = $"DocShare/users/{user.user_id}",
-                            Transformation = new Transformation()
-                            .Width(300)
-                            .Height(300)
-                            .Crop("fill")
-                        };
-
-                        var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
-
-                        //Cập nhật hình ảnh
-                        user.avatar_url = uploadResult.SecureUrl.ToString();
-                        _context.USERS.Update(user);
-                        await _context.SaveChangesAsync();
-                        return Ok(new
-                        {
-                            message = "Cập nhật ảnh đại diện thành công!",
-                            success = true,
-                            user = new { email = user.Email, fullName = user.full_name, avatarUrl = user.avatar_url }
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        return StatusCode(500, $"Lỗi khi lấy assetId: {ex.Message}");
-                    }
-
-                }
             }
-            catch (Exception ex)
+
+            user.avatar_url = uploadResult.SecureUrl.ToString();
+            user.avatar_public_id = uploadResult.PublicId;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
             {
-                _logger.LogError($"Error uploading image: {ex.Message}");
-                return StatusCode(500, $"Internal server error: {ex.Message}");
-            }
+                success = true,
+                message = "Cập nhật ảnh đại diện thành công",
+                user = BuildUserResponse(user)
+            });
         }
+
         //Cập nhật thông tin cá nhân
         [HttpPut("update-profile")]
         public async Task<IActionResult> UpdateProfile([FromBody] UserUpdateDTO dto)
@@ -814,13 +829,7 @@ namespace DocShareAPI.Controllers
             {
                 success = true,
                 message = "Cập nhật thông tin thành công",
-                user = new
-                {
-                    username = user.Username,
-                    fullName = user.full_name,
-                    email = user.Email,
-                    avatarUrl = user.avatar_url
-                }
+                user = BuildUserResponse(user)
             });
         }
 
@@ -838,8 +847,24 @@ namespace DocShareAPI.Controllers
                 return false;
             }
         }
+
+        private static object BuildUserResponse(Users user)
+        {
+            return new
+            {
+                userId = user.user_id,
+                username = user.Username,
+                email = user.Email,
+                fullName = user.full_name,
+                avatarUrl = user.avatar_url,
+                role = user.Role,
+                isVerified = user.is_verified,
+                twoFactorEnabled = user.two_factor_enabled
+            };
+        }
+
         // Gửi mã 2FA
-        private async Task SendTwoFactorCode(Users user, string code)
+        private async Task SendTwoFactorCode(Users user, string code, string requestName)
         {
             switch (user.two_factor_method)
             {
@@ -848,7 +873,8 @@ namespace DocShareAPI.Controllers
                     await _emailService.SendTwoFactorCodeAsync(
                         toEmail: user.Email,
                         recipientName: user.full_name ?? user.Username,
-                        twoFactorCode: code
+                        twoFactorCode: code,
+                        requestName: requestName
                         );
                     break;
                     //case TwoFactorMethod.SMS:

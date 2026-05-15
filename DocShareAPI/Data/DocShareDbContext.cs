@@ -27,6 +27,27 @@ namespace DocShareAPI.Data
             modelBuilder.Entity<Users>()
            .Property(u => u.two_factor_method)
            .HasConversion<string>(); // Convert enum to string
+
+            modelBuilder.Entity<Users>()
+                .HasIndex(u => u.Email)
+                .IsUnique();
+            modelBuilder.Entity<Users>()
+                .HasIndex(u => u.Username)
+                .IsUnique();
+            modelBuilder.Entity<Documents>()
+                .HasIndex(d => new { d.is_public, d.uploaded_at });
+            modelBuilder.Entity<Documents>()
+                .HasIndex(d => d.user_id);
+            modelBuilder.Entity<Tokens>()
+                .HasIndex(t => t.token)
+                .IsUnique();
+            modelBuilder.Entity<Tokens>()
+                .HasIndex(t => new { t.user_id, t.type, t.is_active, t.expires_at });
+            modelBuilder.Entity<Categories>()
+                .HasIndex(c => c.parent_id);
+            modelBuilder.Entity<Likes>()
+                .HasIndex(l => new { l.user_id, l.document_id })
+                .IsUnique();
             // Đảm bảo id tự động tăng
             modelBuilder.Entity<Collections>()
                 .Property(c => c.collection_id)
@@ -67,6 +88,8 @@ namespace DocShareAPI.Data
 
             modelBuilder.Entity<DocumentCategories>()
                 .HasKey(dc => new { dc.document_id, dc.category_id });
+            modelBuilder.Entity<DocumentCategories>()
+                .HasIndex(dc => dc.category_id);
             //Document - Category
             modelBuilder.Entity<DocumentCategories>()
                 .HasOne(dc => dc.Documents)
@@ -80,6 +103,8 @@ namespace DocShareAPI.Data
 
             modelBuilder.Entity<DocumentTags>()
                 .HasKey(dt => new { dt.document_id, dt.tag_id });
+            modelBuilder.Entity<DocumentTags>()
+                .HasIndex(dt => dt.tag_id);
 
             modelBuilder.Entity<DocumentTags>()
                 .HasOne(dt => dt.Documents)
@@ -93,6 +118,8 @@ namespace DocShareAPI.Data
 
             modelBuilder.Entity<CollectionDocuments>()
                 .HasKey(cd => new { cd.document_id, cd.collection_id });
+            modelBuilder.Entity<CollectionDocuments>()
+                .HasIndex(cd => cd.collection_id);
 
             modelBuilder.Entity<CollectionDocuments>()
                 .HasOne(cd => cd.Collections)

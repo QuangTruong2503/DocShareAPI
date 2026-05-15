@@ -32,6 +32,26 @@ namespace DocShareAPI.Controllers.Auth
 
             var userId = decodedToken.userID;
 
+            var document = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Where(d => d.document_id == documentId)
+                .Select(d => new
+                {
+                    d.user_id,
+                    d.is_public
+                })
+                .FirstOrDefaultAsync();
+
+            if (document == null)
+                return NotFound(new { message = "Document not found" });
+
+            bool canReact = document.is_public ||
+                document.user_id == userId ||
+                decodedToken.roleID == "admin";
+
+            if (!canReact)
+                return Forbid();
+
             var existing = await _context.LIKES
                 .FirstOrDefaultAsync(l =>
                     l.user_id == userId &&
@@ -69,17 +89,21 @@ namespace DocShareAPI.Controllers.Auth
             }
 
             await _context.SaveChangesAsync();
-            var likeCount = await _context.LIKES
-                .CountAsync(l => l.document_id == documentId && l.reaction == 1);
-
-            var dislikeCount = await _context.LIKES
-                .CountAsync(l => l.document_id == documentId && l.reaction == -1);
+            var counts = await _context.LIKES
+                .Where(l => l.document_id == documentId)
+                .GroupBy(l => l.document_id)
+                .Select(g => new
+                {
+                    likeCount = g.Count(l => l.reaction == 1),
+                    dislikeCount = g.Count(l => l.reaction == -1)
+                })
+                .FirstOrDefaultAsync();
 
             return Ok(new
             {
                 reaction = finalReaction,
-                likeCount,
-                dislikeCount
+                likeCount = counts?.likeCount ?? 0,
+                dislikeCount = counts?.dislikeCount ?? 0
             });
         }
     }

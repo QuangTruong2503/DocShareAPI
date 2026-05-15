@@ -9,7 +9,9 @@
         public int PageSize
         {
             get => _pageSize;
-            set => _pageSize = value > MaxPageSize ? MaxPageSize : value;
+            set => _pageSize = value <= 0 ? 8 : value > MaxPageSize ? MaxPageSize : value;
         }
+
+        public int ValidPageNumber => PageNumber <= 0 ? 1 : PageNumber;
     }
 }

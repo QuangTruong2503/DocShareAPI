@@ -26,6 +26,7 @@ namespace DocShareAPI.Controllers.Public
 
             // Lấy document (không filter quyền)
             var document = await _context.DOCUMENTS
+                .AsNoTracking()
                 .Where(d => d.document_id == documentID)
                 .Select(d => new
                 {
@@ -93,6 +94,13 @@ namespace DocShareAPI.Controllers.Public
         [HttpGet("search-documents")]
         public async Task<IActionResult> SearchDocuments([FromQuery] PaginationParams paginationParams, [FromQuery] string search)
         {
+            if (string.IsNullOrWhiteSpace(search))
+            {
+                return BadRequest(new { message = "Search query is required." });
+            }
+
+            var normalizedSearch = search.Trim().ToLower();
+
             var query = from document in _context.DOCUMENTS
                         join user in _context.USERS on document.user_id equals user.user_id
                         join docCate in _context.DOCUMENT_CATEGORIES on document.document_id equals docCate.document_id into docCateGroup
@@ -110,10 +118,11 @@ namespace DocShareAPI.Controllers.Public
                         select new { document, user, category, tag };
 
             var documents = await query
-                .Where(q => q.document.Title.ToLower().Contains(search.ToLower())
-                    || q.category.Name.ToLower().Contains(search.ToLower())
-                    || q.tag.Name.ToLower().Contains(search.ToLower())
-                    || (q.document.Description != null && q.document.Description.ToLower().Contains(search.ToLower())))
+                .Where(q => q.document.is_public &&
+                    (q.document.Title.ToLower().Contains(normalizedSearch)
+                    || (q.category != null && q.category.Name.ToLower().Contains(normalizedSearch))
+                    || (q.tag != null && q.tag.Name.ToLower().Contains(normalizedSearch))
+                    || (q.document.Description != null && q.document.Description.ToLower().Contains(normalizedSearch))))
                 .Select(q => new
                 {
                     q.document.document_id,
@@ -123,6 +132,7 @@ namespace DocShareAPI.Controllers.Public
                     q.document.is_public,
                 })
                 .Distinct()
+                .OrderBy(d => d.Title)
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
             return Ok(new
             {
@@ -142,6 +152,7 @@ namespace DocShareAPI.Controllers.Public
         {
             // 1. Kiểm tra category
             var category = await _context.CATEGORIES
+                .AsNoTracking()
                 .FirstOrDefaultAsync(c => c.category_id == categoryID);
 
             if (category == null)
@@ -149,6 +160,7 @@ namespace DocShareAPI.Controllers.Public
 
             // 2. Lấy category cha + con
             var categoryIds = await _context.CATEGORIES
+                .AsNoTracking()
                 .Where(c => c.category_id == categoryID || c.parent_id == categoryID)
                 .Select(c => c.category_id)
                 .ToListAsync();
@@ -218,8 +230,8 @@ namespace DocShareAPI.Controllers.Public
 
             // Fetch all matching documents in a single query
             var documents = await _context.DOCUMENTS
+                .AsNoTracking()
                 .Where(d => validDocumentIDs.Contains(d.document_id) && d.is_public == true)
-                .Include(d => d.Users)
                 .Select(d => new // Use a DTO for type safety
                 {
                     d.document_id,

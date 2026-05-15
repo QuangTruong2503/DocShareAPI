@@ -19,14 +19,25 @@ namespace DocShareAPI.Controllers.Public
         [HttpGet("get-all-categories")]
         public async Task<IActionResult> GetAllCategories()
         {
-            var categories = await _context.CATEGORIES.Select(c => new { c.category_id, c.Name, c.Description, c.parent_id }).ToListAsync();
+            var categories = await _context.CATEGORIES
+                .AsNoTracking()
+                .Select(c => new { c.category_id, c.Name, c.Description, c.parent_id })
+                .ToListAsync();
             return Ok(categories);
         }
         //Lấy danh sách dựa vào search tên category
         [HttpGet("search-category")]
         public async Task<IActionResult> SearchCategory(string search)
         {
-            var categories = await _context.CATEGORIES.Where(c => c.Name.Contains(search)).Select(c => new { c.category_id, c.Name, c.Description, c.parent_id }).ToListAsync();
+            if (string.IsNullOrWhiteSpace(search))
+                return BadRequest(new { message = "Search query is required." });
+
+            var normalizedSearch = search.Trim();
+            var categories = await _context.CATEGORIES
+                .AsNoTracking()
+                .Where(c => c.Name.Contains(normalizedSearch))
+                .Select(c => new { c.category_id, c.Name, c.Description, c.parent_id })
+                .ToListAsync();
             return Ok(categories);
         }
         //Lấy danh sách categories dựa vào id
@@ -34,6 +45,7 @@ namespace DocShareAPI.Controllers.Public
         public async Task<IActionResult> GetCategoryById([FromQuery] string id)
         {
             var category = await _context.CATEGORIES
+                .AsNoTracking()
                 .Where(c => c.category_id == id)
                 .Select(c => new { c.category_id, c.Name, c.Description, c.parent_id })
                 .FirstOrDefaultAsync();
@@ -50,6 +62,7 @@ namespace DocShareAPI.Controllers.Public
         public async Task<IActionResult> GetCategoryTree()
         {
             var categories = await _context.CATEGORIES
+                .AsNoTracking()
                 .Select(c => new CategoryDto
                 {
                     category_id = c.category_id,

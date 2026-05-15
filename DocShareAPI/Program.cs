@@ -48,14 +48,31 @@ else
 // Thêm CORS vào dịch vụ
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowSpecificOrigins", builder =>
+    options.AddPolicy("AllowSpecificOrigins", corsBuilder =>
     {
-        //builder.WithOrigins("http://localhost:3000") // Cho phép các trang web được sử dụng
-        //       .AllowAnyHeader()
-        //       .AllowAnyMethod();
-        builder.AllowAnyOrigin() // Cho phép các trang web được sử dụng
-               .AllowAnyHeader()
-               .AllowAnyMethod();
+        var configuredOrigins = Environment.GetEnvironmentVariable("CORS_ALLOWED_ORIGINS")
+            ?? builder.Configuration["Cors:AllowedOrigins"];
+
+        var allowedOrigins = configuredOrigins?
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            ?? Array.Empty<string>();
+
+        if (allowedOrigins.Length > 0)
+        {
+            corsBuilder.WithOrigins(allowedOrigins)
+                       .AllowAnyHeader()
+                       .AllowAnyMethod();
+        }
+        else if (builder.Environment.IsDevelopment())
+        {
+            corsBuilder.AllowAnyOrigin()
+                       .AllowAnyHeader()
+                       .AllowAnyMethod();
+        }
+        else
+        {
+            throw new InvalidOperationException("CORS_ALLOWED_ORIGINS or Cors:AllowedOrigins must be configured outside Development.");
+        }
     });
 });
 
@@ -148,17 +165,22 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors("AllowSpecificOrigins");
-
-app.UseDeveloperExceptionPage();
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}
 
 app.UseRouting();
 
+app.UseCors("AllowSpecificOrigins");
+
 app.UseHttpsRedirection();
 
-app.UseAuthorization();
+app.UseAuthentication();
 
 app.UseTokenValidation();
+
+app.UseAuthorization();
 
 app.MapControllers();
 

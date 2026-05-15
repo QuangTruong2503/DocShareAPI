@@ -44,16 +44,30 @@ namespace DocShareAPI.Controllers.Auth
         [HttpGet("documents")]
         public async Task<ActionResult> GetAllDocuments([FromQuery] PaginationParams paginationParams)
         {
-            var query = _context.DOCUMENTS.AsQueryable();
+            var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedTokenResponse == null)
+            {
+                return Unauthorized();
+            }
+
+            if (decodedTokenResponse.roleID != "admin")
+            {
+                return Forbid();
+            }
+
+            var query = _context.DOCUMENTS.AsNoTracking();
             var pagedData = await query
+                .OrderByDescending(d => d.uploaded_at)
                 .Select(d => new
                 {
                     d.document_id,
                     full_name = d.Users != null ? d.Users.full_name : string.Empty,
                     d.Title,
+                    d.Description,
                     d.thumbnail_url,
                     d.is_public,
-                    d.public_id
+                    d.uploaded_at,
+                    d.download_count
                 })
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
 
@@ -83,7 +97,8 @@ namespace DocShareAPI.Controllers.Auth
                 return Unauthorized();
             }
 
-            var query = _context.DOCUMENTS.AsQueryable()
+            var query = _context.DOCUMENTS
+                .AsNoTracking()
                 .Where(d => d.user_id == decodedTokenResponse.userID);
             if (isPublic != null)
             {
@@ -92,9 +107,9 @@ namespace DocShareAPI.Controllers.Auth
             // Apply sorting
             query = sortBy.ToLower() switch
             {
-                "date" => query.OrderBy(d => d.uploaded_at),
+                "date" => query.OrderByDescending(d => d.uploaded_at),
                 "title" => query.OrderBy(d => d.Title),
-                _ => query.OrderBy(d => d.uploaded_at) // Default to sort by date descending
+                _ => query.OrderByDescending(d => d.uploaded_at)
             };
             var pageData = await query
                 .Select(d => new
@@ -201,7 +216,7 @@ namespace DocShareAPI.Controllers.Auth
                     newDoc.document_id,
                     newDoc.Title,
                     newDoc.thumbnail_url,
-                    uploadResult
+                    newDoc.file_url
                 });
             }
             catch (Exception ex)
@@ -234,7 +249,7 @@ namespace DocShareAPI.Controllers.Auth
                 }
                 if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
                 {
-                    return BadRequest(new { message = "You are not the owner of this document or an admin" });
+                    return Forbid();
                 }
                 document.Title = documentUpdate.title;
                 document.Description = documentUpdate.description;
@@ -242,7 +257,15 @@ namespace DocShareAPI.Controllers.Auth
                 await _context.SaveChangesAsync();
                 return Ok(new
                 {
-                    data = document,
+                    data = new
+                    {
+                        document.document_id,
+                        document.Title,
+                        document.Description,
+                        document.thumbnail_url,
+                        document.uploaded_at,
+                        document.is_public
+                    },
                     message = "Document updated successfully",
                     success = true
                 });
@@ -273,7 +296,7 @@ namespace DocShareAPI.Controllers.Auth
 
             if (document == null)
             {
-                return BadRequest(new
+                return NotFound(new
                 {
                     message = "Document not found or you don't have permission!"
                 });
@@ -380,12 +403,12 @@ namespace DocShareAPI.Controllers.Auth
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
             if (document == null)
             {
-                return BadRequest(new { message = "Document not found" });
+                return NotFound(new { message = "Document not found" });
             }
 
             if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
             {
-                return BadRequest(new { message = "You are not the owner of this document or an admin" });
+                return Forbid();
             }
 
             var result = await DeleteFromCloudinary(document.public_id);
@@ -420,6 +443,16 @@ namespace DocShareAPI.Controllers.Auth
                 {
                     return NotFound($"No document found with ID: {documentID}");
                 }
+
+                bool canDownload = document.is_public ||
+                    document.user_id == decodedTokenResponse.userID ||
+                    decodedTokenResponse.roleID == "admin";
+
+                if (!canDownload)
+                {
+                    return Forbid();
+                }
+
                 var result = await _cloudinaryService.Cloudinary.GetResourceByAssetIdAsync(document.asset_id);
                 if (result == null || string.IsNullOrEmpty(result.SecureUrl))
                 {
@@ -459,13 +492,59 @@ namespace DocShareAPI.Controllers.Auth
                 return false;
             }
 
-            if (!_allowedDocumentTypes.Contains(file.ContentType))
+            if (!_allowedDocumentTypes.Any(t => string.Equals(t, file.ContentType, StringComparison.OrdinalIgnoreCase)))
             {
                 validationMessage = $"Invalid document type: {file.ContentType}. Allowed types are: PDF, DOCX, TXT.";
                 return false;
             }
 
+            var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+            var allowedExtensions = new[] { ".pdf", ".doc", ".docx", ".txt" };
+            if (!allowedExtensions.Contains(extension))
+            {
+                validationMessage = "Invalid document extension. Allowed extensions are: PDF, DOC, DOCX, TXT.";
+                return false;
+            }
+
+            if (!HasValidFileSignature(file, extension))
+            {
+                validationMessage = "Document content does not match the uploaded file type.";
+                return false;
+            }
+
             return true;
+        }
+
+        private static bool HasValidFileSignature(IFormFile file, string extension)
+        {
+            using var stream = file.OpenReadStream();
+            var header = new byte[8];
+            var bytesRead = stream.Read(header, 0, header.Length);
+
+            return extension switch
+            {
+                ".pdf" => bytesRead >= 4
+                    && header[0] == 0x25
+                    && header[1] == 0x50
+                    && header[2] == 0x44
+                    && header[3] == 0x46,
+                ".docx" => bytesRead >= 4
+                    && header[0] == 0x50
+                    && header[1] == 0x4B
+                    && header[2] == 0x03
+                    && header[3] == 0x04,
+                ".doc" => bytesRead >= 8
+                    && header[0] == 0xD0
+                    && header[1] == 0xCF
+                    && header[2] == 0x11
+                    && header[3] == 0xE0
+                    && header[4] == 0xA1
+                    && header[5] == 0xB1
+                    && header[6] == 0x1A
+                    && header[7] == 0xE1,
+                ".txt" => bytesRead > 0 && !header.Take(bytesRead).Contains((byte)0x00),
+                _ => false
+            };
         }
         //Upload tài liêu
         private async Task<ImageUploadResult> UploadToCloudinary(IFormFile file)

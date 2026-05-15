@@ -2,6 +2,10 @@
 {
     public interface ITwoFactorEmailService
     {
-        Task SendTwoFactorCodeAsync(string toEmail, string recipientName, string twoFactorCode);
+        Task SendTwoFactorCodeAsync(
+            string toEmail,
+            string recipientName,
+            string twoFactorCode,
+            string requestName);
     }
 }

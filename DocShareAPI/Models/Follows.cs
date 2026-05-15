@@ -9,8 +9,8 @@ namespace DocShareAPI.Models
         public Guid following_id { get; set; }
         public DateTime created_at { get; set; } = DateTime.UtcNow;
 
-        public Users Follower { get; set; }
-        public Users Following { get; set; }
+        public Users Follower { get; set; } = null!;
+        public Users Following { get; set; } = null!;
     }
 
 }
