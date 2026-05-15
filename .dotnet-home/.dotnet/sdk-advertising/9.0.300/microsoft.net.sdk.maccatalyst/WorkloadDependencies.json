@@ -1,0 +1,15 @@
+{
+  "microsoft.net.sdk.maccatalyst": {
+    "workload": {
+      "alias": [ "maccatalyst" ],
+      "version": "26.4.9015"
+    },
+    "xcode": {
+      "version": "[26.4,)",
+      "recommendedVersion": "26.4"
+    },
+    "sdk": {
+      "version": "26.4"
+    }
+  }
+}
