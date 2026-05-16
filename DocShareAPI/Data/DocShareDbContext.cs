@@ -74,6 +74,16 @@ namespace DocShareAPI.Data
                 .Property(t => t.type)
                 .HasConversion<string>();
 
+            modelBuilder.Entity<Reports>()
+                .HasOne(r => r.Users)
+                .WithMany()
+                .HasForeignKey(r => r.user_id);
+
+            modelBuilder.Entity<Reports>()
+                .HasOne(r => r.Documents)
+                .WithMany()
+                .HasForeignKey(r => r.document_id);
+
             // Cấu hình mối quan hệ Collections -> Users
             modelBuilder.Entity<Collections>()
                 .HasOne(c => c.Users)              // Navigation property

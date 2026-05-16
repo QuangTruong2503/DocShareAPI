@@ -805,22 +805,11 @@ namespace DocShareAPI.Controllers
             }
 
             // Validation cơ bản (nên dùng FluentValidation để đẹp hơn)
-            if (string.IsNullOrWhiteSpace(dto.full_name))
+            if (string.IsNullOrWhiteSpace(dto.fullname))
                 return BadRequest(new { message = "Họ tên không được để trống", success = false });
 
-            if (string.IsNullOrWhiteSpace(dto.email) || !IsValidEmail(dto.email))
-                return BadRequest(new { message = "Email không hợp lệ", success = false });
-
-            // Kiểm tra trùng Email
-            if (dto.email != user.Email &&
-                await _context.USERS.AnyAsync(u => u.Email == dto.email))
-            {
-                return Conflict(new { message = "Email đã được sử dụng", success = false });
-            }
-
             // Cập nhật
-            user.full_name = dto.full_name.Trim();
-            user.Email = dto.email.Trim();
+            user.full_name = dto.fullname.Trim();
 
             _context.USERS.Update(user);
             await _context.SaveChangesAsync();
