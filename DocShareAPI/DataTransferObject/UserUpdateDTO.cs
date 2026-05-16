@@ -2,7 +2,6 @@
 {
     public class UserUpdateDTO
     {
-        public required string full_name { get; set; }
-        public required string email { get; set; }
+        public required string fullname { get; set; }
     }
 }

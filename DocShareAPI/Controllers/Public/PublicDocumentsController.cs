@@ -32,6 +32,7 @@ namespace DocShareAPI.Controllers.Public
                 {
                     d.document_id,
                     d.user_id,
+                    full_name = d.Users != null ? d.Users.full_name : null,
                     d.Title,
                     d.Description,
                     d.file_url,
