@@ -11,40 +11,24 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Lấy chứng chỉ SSL từ biến môi trường
 var sslCaCert = Environment.GetEnvironmentVariable("SSL_CA_CERT");
 if (!string.IsNullOrEmpty(sslCaCert))
 {
-    // Tạo file tạm thời chứa nội dung chứng chỉ
-    var caCertPath = "/tmp/ca.pem";  // Đường dẫn tạm thời
+    var caCertPath = "/tmp/ca.pem";
     System.IO.File.WriteAllText(caCertPath, sslCaCert);
-
-    // Lấy chuỗi kết nối MySQL từ biến môi trường
-    string? connectionString = Environment.GetEnvironmentVariable("MYSQL_CONNECTION");
-    if (string.IsNullOrEmpty(connectionString))
-    {
-        throw new InvalidOperationException("MYSQL_CONNECTION environment variable is not set.");
-    }
-
-    // Cấu hình DbContext với chuỗi kết nối MySQL và SSL
-    builder.Services.AddDbContext<DocShareDbContext>(options =>
-        options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29)),
-            mySqlOptions => mySqlOptions.EnableRetryOnFailure()
-        ));
 }
-else
+
+var connectionString = Environment.GetEnvironmentVariable("MYSQL_CONNECTION")
+    ?? builder.Configuration.GetConnectionString("MysqlConnection");
+
+if (string.IsNullOrEmpty(connectionString))
 {
-    // Lấy chuỗi kết nối MySQL từ appsettings.json
-    string? connectionString = builder.Configuration.GetConnectionString("MysqlConnection");
-    if (string.IsNullOrEmpty(connectionString))
-    {
-        throw new InvalidOperationException("MysqlConnection is not configured in appsettings.json.");
-    }
-
-    // Cấu hình DbContext với chuỗi kết nối MySQL
-    builder.Services.AddDbContext<DocShareDbContext>(options =>
-        options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29))));
+    throw new InvalidOperationException("MYSQL_CONNECTION or ConnectionStrings: MysqlConnection must be configured.");
 }
+
+builder.Services.AddDbContext<DocShareDbContext>(options =>
+    options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 29)),
+        mySqlOptions => mySqlOptions.EnableRetryOnFailure()));
 
 // Thêm CORS vào dịch vụ
 builder.Services.AddCors(options =>
