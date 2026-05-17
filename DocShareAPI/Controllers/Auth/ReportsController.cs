@@ -2,6 +2,7 @@ using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject.Reports;
 using DocShareAPI.Helpers.PageList;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -32,10 +33,12 @@ namespace DocShareAPI.Controllers.Auth
         };
 
         private readonly DocShareDbContext _context;
+        private readonly INotificationService _notificationService;
 
-        public ReportsController(DocShareDbContext context)
+        public ReportsController(DocShareDbContext context, INotificationService notificationService)
         {
             _context = context;
+            _notificationService = notificationService;
         }
 
         [HttpGet("options")]
@@ -138,6 +141,45 @@ namespace DocShareAPI.Controllers.Auth
 
             _context.REPORTS.Add(report);
             await _context.SaveChangesAsync();
+
+            var adminIds = await _context.USERS
+                .AsNoTracking()
+                .Where(u => u.Role == "admin" && u.user_id != decodedToken.userID)
+                .Select(u => u.user_id)
+                .ToListAsync();
+
+            var notifications = adminIds
+                .Select(adminId => new NotificationCreateRequest
+                {
+                    recipientUserId = adminId,
+                    actorUserId = decodedToken.userID,
+                    type = "REPORT_CREATED",
+                    title = "Có báo cáo tài liệu mới",
+                    message = $"Tài liệu \"{document.Title}\" vừa bị báo cáo.",
+                    relatedDocumentId = document.document_id,
+                    relatedReportId = report.report_id,
+                    targetUrl = $"/admin/reports/{report.report_id}",
+                    metadata = new { reason }
+                })
+                .ToList();
+
+            if (document.user_id != decodedToken.userID)
+            {
+                notifications.Add(new NotificationCreateRequest
+                {
+                    recipientUserId = document.user_id,
+                    actorUserId = decodedToken.userID,
+                    type = "REPORT_CREATED",
+                    title = "Tài liệu của bạn có báo cáo mới",
+                    message = $"Tài liệu \"{document.Title}\" vừa bị báo cáo.",
+                    relatedDocumentId = document.document_id,
+                    relatedReportId = report.report_id,
+                    targetUrl = $"/documents/{document.document_id}",
+                    metadata = new { reason }
+                });
+            }
+
+            await _notificationService.CreateManyAsync(notifications);
 
             var response = new
             {

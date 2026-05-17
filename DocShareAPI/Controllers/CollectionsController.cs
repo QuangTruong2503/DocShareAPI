@@ -1,6 +1,7 @@
 ﻿using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,9 +14,12 @@ namespace DocShareAPI.Controllers
     public class CollectionsController : ControllerBase
     {
         private readonly DocShareDbContext _context;
-        public CollectionsController(DocShareDbContext context)
+        private readonly INotificationService _notificationService;
+
+        public CollectionsController(DocShareDbContext context, INotificationService notificationService)
         {
             _context = context;
+            _notificationService = notificationService;
         }
 
         // 1. Thêm mới một bộ sưu tập
@@ -282,6 +286,19 @@ namespace DocShareAPI.Controllers
 
             _context.COLLECTION_DOCUMENTS.Add(collectionDocument);
             await _context.SaveChangesAsync();
+
+            if (document.user_id != decodedToken.userID && collection.is_public)
+            {
+                await _notificationService.CreateAsync(
+                    recipientUserId: document.user_id,
+                    actorUserId: decodedToken.userID,
+                    type: "DOCUMENT_ADDED_TO_COLLECTION",
+                    title: "Tài liệu được thêm vào bộ sưu tập",
+                    message: $"Tài liệu \"{document.Title}\" đã được thêm vào bộ sưu tập \"{collection.Name}\".",
+                    relatedDocumentId: document.document_id,
+                    targetUrl: $"/collections/{collection.collection_id}",
+                    metadata: new { collection_id = collection.collection_id, collection_name = collection.Name });
+            }
 
             return Ok(new
             {

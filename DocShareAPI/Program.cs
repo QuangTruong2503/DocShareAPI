@@ -1,5 +1,6 @@
 using DocShareAPI.Data;
 using DocShareAPI.EmailServices;
+using DocShareAPI.Hubs;
 using DocShareAPI.Services;
 using DocShareAPI.Services.EmailServices;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -112,6 +113,7 @@ var secretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
 
 // Đăng ký TokenServices với secretKey
 builder.Services.AddScoped<TokenServices>(_ => new TokenServices(secretKey));
+builder.Services.AddScoped<INotificationService, NotificationService>();
 
 // Thêm dịch vụ xác thực JWT
 builder.Services.AddAuthentication(options =>
@@ -155,6 +157,7 @@ builder.Services.AddDistributedMemoryCache(); // Cho 2FA cache
 builder.Services.AddHttpClient<ITwoFactorEmailService, TwoFactorEmailService>();
 
 // Add services to the container.
+builder.Services.AddSignalR();
 builder.Services.AddControllers();
 var app = builder.Build();
 
@@ -183,6 +186,7 @@ app.UseTokenValidation();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<NotificationsHub>("/hubs/notifications");
 
 app.MapGet("/", () => "DocumentShare project is running.");
 app.MapGet("/api", () => "Api project is running.");

@@ -21,14 +21,16 @@ namespace DocShareAPI.Controllers.Auth
         private readonly DocShareDbContext _context;
         private readonly ILogger<DocumentsController> _logger;
         private readonly ICloudinaryService _cloudinaryService;
+        private readonly INotificationService _notificationService;
         private readonly long _maxFileSize;
         private readonly string[] _allowedDocumentTypes;
         private readonly HttpClient _httpClient;
 
-        public DocumentsController(DocShareDbContext context, ICloudinaryService cloudinaryService, ILogger<DocumentsController> logger, IConfiguration configuration, IHttpClientFactory httpClientFactory)
+        public DocumentsController(DocShareDbContext context, ICloudinaryService cloudinaryService, INotificationService notificationService, ILogger<DocumentsController> logger, IConfiguration configuration, IHttpClientFactory httpClientFactory)
         {
             _context = context;
             _cloudinaryService = cloudinaryService;
+            _notificationService = notificationService;
             _logger = logger;
             _httpClient = httpClientFactory.CreateClient();
             _maxFileSize = configuration.GetValue<long>("MaxFileSize", 10 * 1024 * 1024); // Default to 10MB
@@ -209,6 +211,14 @@ namespace DocShareAPI.Controllers.Auth
 
                 var newDoc = await CreateDocumentRecord(fileToUpload, decodedTokenResponse.userID, uploadResult);
 
+                await _notificationService.CreateAsync(
+                    recipientUserId: decodedTokenResponse.userID,
+                    type: "DOCUMENT_UPLOADED",
+                    title: "Tải tài liệu thành công",
+                    message: $"Tài liệu \"{newDoc.Title}\" đã được tải lên.",
+                    relatedDocumentId: newDoc.document_id,
+                    targetUrl: $"/documents/{newDoc.document_id}");
+
                 return Ok(new
                 {
                     message = "Document uploaded successfully",
@@ -251,10 +261,17 @@ namespace DocShareAPI.Controllers.Auth
                 {
                     return Forbid();
                 }
+                var wasPublic = document.is_public;
                 document.Title = documentUpdate.title;
                 document.Description = documentUpdate.description;
                 document.is_public = documentUpdate.is_public;
                 await _context.SaveChangesAsync();
+
+                if (!wasPublic && document.is_public)
+                {
+                    await NotifyFollowersAboutPublishedDocument(document);
+                }
+
                 return Ok(new
                 {
                     data = new
@@ -303,6 +320,7 @@ namespace DocShareAPI.Controllers.Auth
             }
 
             //Update thông tin cơ bản
+            var wasPublic = document.is_public;
             document.Title = documents.title;
             document.Description = documents.description;
             document.is_public = documents.is_public;
@@ -381,6 +399,11 @@ namespace DocShareAPI.Controllers.Auth
 
             // Save 1 lần
             await _context.SaveChangesAsync();
+
+            if (!wasPublic && document.is_public)
+            {
+                await NotifyFollowersAboutPublishedDocument(document);
+            }
 
             return Ok(new
             {
@@ -465,6 +488,19 @@ namespace DocShareAPI.Controllers.Auth
                 // Cập nhật số lượt tải xuống
                 document.download_count++;
                 await _context.SaveChangesAsync();  // Không cần transaction
+
+                if (IsDownloadMilestone(document.download_count) && document.user_id != decodedTokenResponse.userID)
+                {
+                    await _notificationService.CreateAsync(
+                        recipientUserId: document.user_id,
+                        actorUserId: decodedTokenResponse.userID,
+                        type: "DOCUMENT_DOWNLOAD_MILESTONE",
+                        title: "Tài liệu đạt mốc lượt tải",
+                        message: $"Tài liệu \"{document.Title}\" đã đạt {document.download_count} lượt tải.",
+                        relatedDocumentId: document.document_id,
+                        targetUrl: $"/documents/{document.document_id}",
+                        metadata: new { download_count = document.download_count });
+                }
 
                 return File(fileBytes, contentType, fileName);
             }
@@ -612,6 +648,33 @@ namespace DocShareAPI.Controllers.Auth
             Regex regex = new Regex(@"\p{M}");
             string result = regex.Replace(normalized, "").Normalize(NormalizationForm.FormC);
             return result.ToLower().Replace(" ", ""); // Loại bỏ khoảng trắng
+        }
+
+        private async Task NotifyFollowersAboutPublishedDocument(Documents document)
+        {
+            var followerIds = await _context.FOLLOWS
+                .AsNoTracking()
+                .Where(f => f.following_id == document.user_id)
+                .Select(f => f.follower_id)
+                .ToListAsync();
+
+            var notifications = followerIds.Select(followerId => new NotificationCreateRequest
+            {
+                recipientUserId = followerId,
+                actorUserId = document.user_id,
+                type = "DOCUMENT_PUBLISHED",
+                title = "Tài liệu mới từ người bạn theo dõi",
+                message = $"Tài liệu \"{document.Title}\" vừa được công khai.",
+                relatedDocumentId = document.document_id,
+                targetUrl = $"/documents/{document.document_id}"
+            });
+
+            await _notificationService.CreateManyAsync(notifications);
+        }
+
+        private static bool IsDownloadMilestone(int downloadCount)
+        {
+            return downloadCount is 10 or 50 or 100 || (downloadCount > 0 && downloadCount % 500 == 0);
         }
     }
 

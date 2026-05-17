@@ -21,6 +21,7 @@ namespace DocShareAPI.Data
         public DbSet<Reports> REPORTS { get; set; }
         public DbSet<Tokens> TOKENS { get; set; }
         public DbSet<Likes> LIKES { get; set; }
+        public DbSet<Notifications> NOTIFICATIONS { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -45,6 +46,51 @@ namespace DocShareAPI.Data
                 .HasIndex(t => new { t.user_id, t.type, t.is_active, t.expires_at });
             modelBuilder.Entity<Categories>()
                 .HasIndex(c => c.parent_id);
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.notification_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.type)
+                .HasMaxLength(50);
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.title)
+                .HasMaxLength(150);
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.message)
+                .HasMaxLength(1000);
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.target_url)
+                .HasMaxLength(500);
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.metadata)
+                .HasColumnType("json");
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.created_at)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            modelBuilder.Entity<Notifications>()
+                .Property(n => n.updated_at)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            modelBuilder.Entity<Notifications>()
+                .HasIndex(n => new { n.recipient_user_id, n.is_read, n.created_at })
+                .HasDatabaseName("IX_NOTIFICATIONS_recipient_is_read_created");
+            modelBuilder.Entity<Notifications>()
+                .HasIndex(n => new { n.recipient_user_id, n.created_at })
+                .HasDatabaseName("IX_NOTIFICATIONS_recipient_created");
+            modelBuilder.Entity<Notifications>()
+                .HasIndex(n => n.actor_user_id)
+                .HasDatabaseName("IX_NOTIFICATIONS_actor_user_id");
+            modelBuilder.Entity<Notifications>()
+                .HasIndex(n => n.related_document_id)
+                .HasDatabaseName("IX_NOTIFICATIONS_related_document_id");
+            modelBuilder.Entity<Notifications>()
+                .HasIndex(n => n.related_comment_id)
+                .HasDatabaseName("IX_NOTIFICATIONS_related_comment_id");
+            modelBuilder.Entity<Notifications>()
+                .HasIndex(n => n.related_report_id)
+                .HasDatabaseName("IX_NOTIFICATIONS_related_report_id");
+            modelBuilder.Entity<Notifications>()
+                .HasIndex(n => n.type)
+                .HasDatabaseName("IX_NOTIFICATIONS_type");
             modelBuilder.Entity<Likes>()
                 .HasIndex(l => new { l.user_id, l.document_id })
                 .IsUnique();
@@ -83,6 +129,34 @@ namespace DocShareAPI.Data
                 .HasOne(r => r.Documents)
                 .WithMany()
                 .HasForeignKey(r => r.document_id);
+
+            modelBuilder.Entity<Notifications>()
+                .HasOne(n => n.RecipientUser)
+                .WithMany()
+                .HasForeignKey(n => n.recipient_user_id)
+                .HasConstraintName("FK_NOTIFICATIONS_recipient_user")
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Notifications>()
+                .HasOne(n => n.ActorUser)
+                .WithMany()
+                .HasForeignKey(n => n.actor_user_id)
+                .HasConstraintName("FK_NOTIFICATIONS_actor_user")
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<Notifications>()
+                .HasOne(n => n.RelatedDocument)
+                .WithMany()
+                .HasForeignKey(n => n.related_document_id)
+                .HasConstraintName("FK_NOTIFICATIONS_document")
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<Notifications>()
+                .HasOne(n => n.RelatedReport)
+                .WithMany()
+                .HasForeignKey(n => n.related_report_id)
+                .HasConstraintName("FK_NOTIFICATIONS_report")
+                .OnDelete(DeleteBehavior.SetNull);
 
             // Cấu hình mối quan hệ Collections -> Users
             modelBuilder.Entity<Collections>()
