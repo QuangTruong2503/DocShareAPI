@@ -17,11 +17,13 @@ namespace DocShareAPI.Controllers
     {
         private readonly DocShareDbContext _context;
         private readonly ICloudinaryService _cloudinaryService;
+        private readonly INotificationService _notificationService;
 
-        public AdminController(DocShareDbContext context, ICloudinaryService cloudinaryService)
+        public AdminController(DocShareDbContext context, ICloudinaryService cloudinaryService, INotificationService notificationService)
         {
             _context = context;
             _cloudinaryService = cloudinaryService;
+            _notificationService = notificationService;
         }
 
         [HttpGet("dashboard")]
@@ -261,6 +263,8 @@ namespace DocShareAPI.Controllers
             if (user == null)
                 return NotFound(new { success = false, message = "User not found." });
 
+            var changes = new List<string>();
+
             if (request.Role != null)
             {
                 var role = request.Role.Trim().ToLowerInvariant();
@@ -270,19 +274,54 @@ namespace DocShareAPI.Controllers
                 if (user.user_id == adminToken!.userID && role != "admin")
                     return BadRequest(new { success = false, message = "Admin cannot remove their own admin role." });
 
-                user.Role = role;
+                if (user.Role != role)
+                {
+                    user.Role = role;
+                    changes.Add("role");
+                }
             }
 
             if (request.FullName != null)
-                user.full_name = string.IsNullOrWhiteSpace(request.FullName) ? null : request.FullName.Trim();
+            {
+                var fullName = string.IsNullOrWhiteSpace(request.FullName) ? null : request.FullName.Trim();
+                if (user.full_name != fullName)
+                {
+                    user.full_name = fullName;
+                    changes.Add("full_name");
+                }
+            }
 
             if (request.IsVerified.HasValue)
-                user.is_verified = request.IsVerified.Value;
+            {
+                if (user.is_verified != request.IsVerified.Value)
+                {
+                    user.is_verified = request.IsVerified.Value;
+                    changes.Add("is_verified");
+                }
+            }
 
             if (request.TwoFactorEnabled.HasValue)
-                user.two_factor_enabled = request.TwoFactorEnabled.Value;
+            {
+                if (user.two_factor_enabled != request.TwoFactorEnabled.Value)
+                {
+                    user.two_factor_enabled = request.TwoFactorEnabled.Value;
+                    changes.Add("two_factor_enabled");
+                }
+            }
 
             await _context.SaveChangesAsync();
+
+            if (changes.Count > 0 && userId != adminToken!.userID)
+            {
+                await _notificationService.CreateAsync(
+                    recipientUserId: userId,
+                    actorUserId: adminToken.userID,
+                    type: "ACCOUNT_UPDATED_BY_ADMIN",
+                    title: "Tài khoản của bạn đã được cập nhật",
+                    message: "Quản trị viên vừa cập nhật thông tin tài khoản của bạn.",
+                    targetUrl: "/profile",
+                    metadata: new { changes });
+            }
 
             return Ok(new
             {
@@ -522,7 +561,7 @@ namespace DocShareAPI.Controllers
         [HttpPatch("documents/{documentId:int}")]
         public async Task<IActionResult> UpdateDocument(int documentId, [FromBody] AdminUpdateDocumentRequest request)
         {
-            if (!TryRequireAdmin(out var error))
+            if (!TryRequireAdmin(out var error, out var adminToken))
                 return error!;
 
             var document = await _context.DOCUMENTS
@@ -533,19 +572,39 @@ namespace DocShareAPI.Controllers
             if (document == null)
                 return NotFound(new { success = false, message = "Document not found." });
 
+            var changes = new List<string>();
+
             if (request.Title != null)
             {
                 if (string.IsNullOrWhiteSpace(request.Title))
                     return BadRequest(new { success = false, message = "Title cannot be empty." });
 
-                document.Title = request.Title.Trim();
+                var title = request.Title.Trim();
+                if (document.Title != title)
+                {
+                    document.Title = title;
+                    changes.Add("title");
+                }
             }
 
             if (request.Description != null)
-                document.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+            {
+                var description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+                if (document.Description != description)
+                {
+                    document.Description = description;
+                    changes.Add("description");
+                }
+            }
 
             if (request.IsPublic.HasValue)
-                document.is_public = request.IsPublic.Value;
+            {
+                if (document.is_public != request.IsPublic.Value)
+                {
+                    document.is_public = request.IsPublic.Value;
+                    changes.Add("is_public");
+                }
+            }
 
             if (request.CategoryIds != null)
             {
@@ -579,6 +638,7 @@ namespace DocShareAPI.Controllers
                     });
 
                 await _context.DOCUMENT_CATEGORIES.AddRangeAsync(categoriesToAdd);
+                changes.Add("categories");
             }
 
             if (request.Tags != null)
@@ -628,9 +688,23 @@ namespace DocShareAPI.Controllers
                     });
 
                 await _context.DOCUMENT_TAGS.AddRangeAsync(tagsToAdd);
+                changes.Add("tags");
             }
 
             await _context.SaveChangesAsync();
+
+            if (changes.Count > 0 && document.user_id != adminToken!.userID)
+            {
+                await _notificationService.CreateAsync(
+                    recipientUserId: document.user_id,
+                    actorUserId: adminToken.userID,
+                    type: "DOCUMENT_UPDATED_BY_ADMIN",
+                    title: "Tài liệu của bạn đã được cập nhật",
+                    message: $"Quản trị viên vừa cập nhật tài liệu \"{document.Title}\".",
+                    relatedDocumentId: document.document_id,
+                    targetUrl: $"/documents/{document.document_id}",
+                    metadata: new { changes = changes.Distinct().ToList() });
+            }
 
             return Ok(new
             {
@@ -643,12 +717,15 @@ namespace DocShareAPI.Controllers
         [HttpDelete("documents/{documentId:int}")]
         public async Task<IActionResult> DeleteDocument(int documentId)
         {
-            if (!TryRequireAdmin(out var error))
+            if (!TryRequireAdmin(out var error, out var adminToken))
                 return error!;
 
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentId);
             if (document == null)
                 return NotFound(new { success = false, message = "Document not found." });
+
+            var ownerId = document.user_id;
+            var documentTitle = document.Title;
 
             await DeleteDocumentRelations(new[] { documentId });
 
@@ -670,6 +747,17 @@ namespace DocShareAPI.Controllers
 
             _context.DOCUMENTS.Remove(document);
             await _context.SaveChangesAsync();
+
+            if (ownerId != adminToken!.userID)
+            {
+                await _notificationService.CreateAsync(
+                    recipientUserId: ownerId,
+                    actorUserId: adminToken.userID,
+                    type: "DOCUMENT_DELETED_BY_ADMIN",
+                    title: "Tài liệu của bạn đã bị xóa",
+                    message: $"Quản trị viên đã xóa tài liệu \"{documentTitle}\".",
+                    metadata: new { document_id = documentId, title = documentTitle });
+            }
 
             return Ok(new
             {
@@ -1042,7 +1130,7 @@ namespace DocShareAPI.Controllers
         [HttpPatch("reports/{reportId:int}")]
         public async Task<IActionResult> UpdateReportStatus(int reportId, [FromBody] AdminUpdateReportRequest request)
         {
-            if (!TryRequireAdmin(out var error))
+            if (!TryRequireAdmin(out var error, out var adminToken))
                 return error!;
 
             if (string.IsNullOrWhiteSpace(request.Status))
@@ -1052,12 +1140,29 @@ namespace DocShareAPI.Controllers
             if (!allowedStatuses.Contains(request.Status))
                 return BadRequest(new { success = false, message = "Status is invalid." });
 
-            var report = await _context.REPORTS.FirstOrDefaultAsync(r => r.report_id == reportId);
+            var report = await _context.REPORTS
+                .Include(r => r.Documents)
+                .FirstOrDefaultAsync(r => r.report_id == reportId);
             if (report == null)
                 return NotFound(new { success = false, message = "Report not found." });
 
+            var oldStatus = report.Status;
             report.Status = request.Status;
             await _context.SaveChangesAsync();
+
+            if (oldStatus != report.Status && report.user_id != adminToken!.userID)
+            {
+                await _notificationService.CreateAsync(
+                    recipientUserId: report.user_id,
+                    actorUserId: adminToken.userID,
+                    type: "REPORT_STATUS_UPDATED",
+                    title: "Báo cáo của bạn đã được cập nhật",
+                    message: $"Báo cáo cho tài liệu \"{report.Documents.Title}\" đã chuyển sang trạng thái \"{report.Status}\".",
+                    relatedDocumentId: report.document_id,
+                    relatedReportId: report.report_id,
+                    targetUrl: $"/reports/{report.report_id}",
+                    metadata: new { old_status = oldStatus, new_status = report.Status });
+            }
 
             return Ok(new
             {

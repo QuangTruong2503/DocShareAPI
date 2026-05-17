@@ -1,5 +1,6 @@
 using DocShareAPI.Data;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,10 +11,12 @@ namespace DocShareAPI.Controllers
     public class FollowsController : ControllerBase
     {
         private readonly DocShareDbContext _context;
+        private readonly INotificationService _notificationService;
 
-        public FollowsController(DocShareDbContext context)
+        public FollowsController(DocShareDbContext context, INotificationService notificationService)
         {
             _context = context;
+            _notificationService = notificationService;
         }
 
         [HttpPost("{followingID:guid}")]
@@ -65,6 +68,24 @@ namespace DocShareAPI.Controllers
 
             _context.FOLLOWS.Add(follow);
             await _context.SaveChangesAsync();
+
+            var notificationAlreadyExists = await _context.NOTIFICATIONS
+                .AsNoTracking()
+                .AnyAsync(n =>
+                    n.type == "FOLLOW_USER" &&
+                    n.actor_user_id == decodedToken.userID &&
+                    n.recipient_user_id == followingID);
+
+            if (!notificationAlreadyExists)
+            {
+                await _notificationService.CreateAsync(
+                    recipientUserId: followingID,
+                    actorUserId: decodedToken.userID,
+                    type: "FOLLOW_USER",
+                    title: "Bạn có người theo dõi mới",
+                    message: "Một người dùng vừa theo dõi bạn.",
+                    targetUrl: $"/users/{decodedToken.userID}");
+            }
 
             return Ok(new
             {

@@ -54,11 +54,9 @@ public class TokenValidationMiddleware
 
         // Public endpoints can be used anonymously. If a stale/bad token is sent,
         // ignore it and let the controller handle the request as a guest.
-        if (context.Request.Headers.TryGetValue("Authorization", out var authHeader))
+        if (TryGetRequestToken(context, out var token, out var invalidAuthorizationHeader))
         {
-            string headerValue = authHeader.ToString();
-
-            if (!TryGetBearerToken(headerValue, out string token))
+            if (invalidAuthorizationHeader)
             {
                 if (!isPublicEndpoint)
                 {
@@ -143,6 +141,32 @@ public class TokenValidationMiddleware
 
         token = headerValue.Substring(BearerPrefix.Length).Trim();
         return !string.IsNullOrWhiteSpace(token);
+    }
+
+    private static bool TryGetRequestToken(HttpContext context, out string token, out bool invalidAuthorizationHeader)
+    {
+        token = string.Empty;
+        invalidAuthorizationHeader = false;
+
+        if (context.Request.Headers.TryGetValue("Authorization", out var authHeader))
+        {
+            if (!TryGetBearerToken(authHeader.ToString(), out token))
+            {
+                invalidAuthorizationHeader = true;
+                return true;
+            }
+
+            return true;
+        }
+
+        var isNotificationHub = context.Request.Path.StartsWithSegments("/hubs/notifications");
+        if (isNotificationHub && context.Request.Query.TryGetValue("access_token", out var accessToken))
+        {
+            token = accessToken.ToString();
+            return !string.IsNullOrWhiteSpace(token);
+        }
+
+        return false;
     }
 }
 public static class TokenValidationMiddlewareExtensions

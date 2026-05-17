@@ -1,6 +1,7 @@
 ﻿using Aspose.Pdf.Drawing;
 using DocShareAPI.Data;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,9 +14,12 @@ namespace DocShareAPI.Controllers.Auth
     public class LikesController : ControllerBase
     {
         private readonly DocShareDbContext _context;
-        public LikesController(DocShareDbContext context)
+        private readonly INotificationService _notificationService;
+
+        public LikesController(DocShareDbContext context, INotificationService notificationService)
         {
             _context = context;
+            _notificationService = notificationService;
         }
 
         //API truyền trạng thái like hoặc dislike
@@ -38,7 +42,8 @@ namespace DocShareAPI.Controllers.Auth
                 .Select(d => new
                 {
                     d.user_id,
-                    d.is_public
+                    d.is_public,
+                    d.Title
                 })
                 .FirstOrDefaultAsync();
 
@@ -89,6 +94,36 @@ namespace DocShareAPI.Controllers.Auth
             }
 
             await _context.SaveChangesAsync();
+
+            if (finalReaction != 0 && document.user_id != userId)
+            {
+                var type = finalReaction == 1 ? "LIKE_DOCUMENT" : "DISLIKE_DOCUMENT";
+                var notificationAlreadyExists = await _context.NOTIFICATIONS
+                    .AsNoTracking()
+                    .AnyAsync(n =>
+                        n.type == type &&
+                        n.actor_user_id == userId &&
+                        n.recipient_user_id == document.user_id &&
+                        n.related_document_id == documentId);
+
+                if (!notificationAlreadyExists)
+                {
+                var title = finalReaction == 1
+                    ? "Tài liệu của bạn có lượt thích mới"
+                    : "Tài liệu của bạn có lượt không thích mới";
+
+                await _notificationService.CreateAsync(
+                    recipientUserId: document.user_id,
+                    actorUserId: userId,
+                    type: type,
+                    title: title,
+                    message: $"Một người dùng đã {(finalReaction == 1 ? "thích" : "không thích")} tài liệu \"{document.Title}\".",
+                    relatedDocumentId: documentId,
+                    targetUrl: $"/documents/{documentId}",
+                    metadata: new { reaction = finalReaction });
+                }
+            }
+
             var counts = await _context.LIKES
                 .Where(l => l.document_id == documentId)
                 .GroupBy(l => l.document_id)

@@ -2,6 +2,7 @@ using DocShareAPI.Data;
 using DocShareAPI.EmailServices;
 using DocShareAPI.Helpers;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using DocShareAPI.Services.EmailServices;
 using ELearningAPI.Helpers;
 using Microsoft.AspNetCore.Mvc;
@@ -19,17 +20,20 @@ namespace DocShareAPI.Controllers
         private readonly VerifyEmailService _verifyEmailService;
         private readonly ResetPasswordEmailService _resetPasswordEmailService;
         private readonly ITwoFactorEmailService _twoFactorEmailService;
+        private readonly INotificationService _notificationService;
 
         public VerificationController(
             DocShareDbContext context,
             VerifyEmailService verifyEmailService,
             ResetPasswordEmailService resetPasswordEmailService,
-            ITwoFactorEmailService twoFactorEmailService)
+            ITwoFactorEmailService twoFactorEmailService,
+            INotificationService notificationService)
         {
             _context = context;
             _verifyEmailService = verifyEmailService;
             _resetPasswordEmailService = resetPasswordEmailService;
             _twoFactorEmailService = twoFactorEmailService;
+            _notificationService = notificationService;
         }
         //Kiểm tra người dùng đã xác thực
         [HttpGet("check-user-verified")]
@@ -426,6 +430,14 @@ namespace DocShareAPI.Controllers
 
             await DeactivateEmailChangeTokens(user.user_id);
             await _context.SaveChangesAsync();
+
+            await _notificationService.CreateAsync(
+                recipientUserId: user.user_id,
+                type: "EMAIL_CHANGED",
+                title: "Email tài khoản đã được thay đổi",
+                message: $"Email đăng nhập của bạn đã được đổi sang {MaskEmail(user.Email)}.",
+                targetUrl: "/profile",
+                metadata: new { old_email = MaskEmail(oldEmail), new_email = MaskEmail(user.Email) });
 
             return Ok(new
             {
