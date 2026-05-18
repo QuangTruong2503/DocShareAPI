@@ -528,11 +528,22 @@ namespace DocShareAPI.Controllers
 
         //Login with Google
         [HttpPost("public/request-login-google")]
+        [HttpPost("~/Users/public/request-login-google")]
         public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request)
         {
-            if (string.IsNullOrWhiteSpace(request.Token))
+            if (string.IsNullOrWhiteSpace(request.token))
             {
                 return BadRequest(new { success = false, message = "Token Google không hợp lệ" });
+            }
+
+            var googleClientId = Environment.GetEnvironmentVariable("GOOGLE_APP_CLIENT_ID") ?? _config["Google:ClientId"];
+            if (string.IsNullOrWhiteSpace(googleClientId))
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Google Client ID chưa được cấu hình"
+                });
             }
 
             GoogleJsonWebSignature.Payload payload;
@@ -540,10 +551,10 @@ namespace DocShareAPI.Controllers
             try
             {
                 payload = await GoogleJsonWebSignature.ValidateAsync(
-                    request.Token,
+                    request.token,
                     new GoogleJsonWebSignature.ValidationSettings
                     {
-                        Audience = new[] { Environment.GetEnvironmentVariable("GOOGLE_APP_CLIENT_ID") ?? _config["Google:ClientId"] }
+                        Audience = new[] { googleClientId }
                     });
 
             }
@@ -567,12 +578,20 @@ namespace DocShareAPI.Controllers
             if (payload.Issuer != "accounts.google.com" &&
                 payload.Issuer != "https://accounts.google.com")
             {
-                return Unauthorized("Invalid issuer");
+                return Unauthorized(new
+                {
+                    success = false,
+                    message = "Google token không đúng issuer"
+                });
             }
             if (payload.ExpirationTimeSeconds <
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds())
             {
-                return Unauthorized("Google token đã hết hạn");
+                return Unauthorized(new
+                {
+                    success = false,
+                    message = "Google token đã hết hạn"
+                });
             }
 
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == payload.Email);
@@ -598,7 +617,7 @@ namespace DocShareAPI.Controllers
 
             // (Optional) Disable old tokens on same device
             await _context.TOKENS
-                .Where(t => t.user_id == user.user_id && t.user_device == request.UserDevice)
+                .Where(t => t.user_id == user.user_id && t.user_device == request.userDevice)
                 .ExecuteUpdateAsync(t => t.SetProperty(x => x.is_active, false));
 
             var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
@@ -612,7 +631,7 @@ namespace DocShareAPI.Controllers
                 expires_at = DateTime.UtcNow.AddDays(3),
                 is_active = true,
                 created_at = DateTime.UtcNow,
-                user_device = request.UserDevice
+                user_device = request.userDevice
             };
 
             _context.TOKENS.Add(tokenEntity);
