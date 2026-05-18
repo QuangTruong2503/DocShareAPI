@@ -22,9 +22,42 @@ namespace DocShareAPI.Data
         public DbSet<Tokens> TOKENS { get; set; }
         public DbSet<Likes> LIKES { get; set; }
         public DbSet<Notifications> NOTIFICATIONS { get; set; }
+        public DbSet<SeoSettings> SEO_SETTINGS { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+            modelBuilder.Entity<SeoSettings>()
+                .ToTable("SEO_SETTINGS");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.id)
+                .ValueGeneratedNever();
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.site_name)
+                .HasColumnType("text");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.site_url)
+                .HasColumnType("text");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.default_title)
+                .HasColumnType("text");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.default_description)
+                .HasColumnType("text");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.default_image)
+                .HasColumnType("text");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.locale)
+                .HasMaxLength(20);
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.robots_txt)
+                .HasColumnType("longtext");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.sitemap_routes)
+                .HasColumnType("json");
+            modelBuilder.Entity<SeoSettings>()
+                .Property(s => s.updated_at)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
             modelBuilder.Entity<Users>()
            .Property(u => u.two_factor_method)
            .HasConversion<string>(); // Convert enum to string
