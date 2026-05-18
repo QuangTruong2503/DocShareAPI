@@ -163,6 +163,8 @@ app.UseCors("AllowSpecificOrigins");
 
 app.UseHttpsRedirection();
 
+app.UseStaticFiles();
+
 app.UseAuthentication();
 
 app.UseTokenValidation();
