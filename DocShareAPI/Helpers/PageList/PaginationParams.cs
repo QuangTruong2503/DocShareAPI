@@ -2,7 +2,7 @@
 {
     public class PaginationParams
     {
-        private const int MaxPageSize = 10; // Giới hạn số lượng bản ghi tối đa mỗi trang
+        private const int MaxPageSize = 50; // Giới hạn số lượng bản ghi tối đa mỗi trang
         public int PageNumber { get; set; } = 1; // Trang mặc định là 1
 
         private int _pageSize = 8;

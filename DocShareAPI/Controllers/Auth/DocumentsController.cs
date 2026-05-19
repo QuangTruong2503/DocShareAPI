@@ -22,15 +22,24 @@ namespace DocShareAPI.Controllers.Auth
         private readonly ILogger<DocumentsController> _logger;
         private readonly ICloudinaryService _cloudinaryService;
         private readonly INotificationService _notificationService;
+        private readonly IFolderPermissionService _folderPermissionService;
         private readonly long _maxFileSize;
         private readonly string[] _allowedDocumentTypes;
         private readonly HttpClient _httpClient;
 
-        public DocumentsController(DocShareDbContext context, ICloudinaryService cloudinaryService, INotificationService notificationService, ILogger<DocumentsController> logger, IConfiguration configuration, IHttpClientFactory httpClientFactory)
+        public DocumentsController(
+            DocShareDbContext context,
+            ICloudinaryService cloudinaryService,
+            INotificationService notificationService,
+            IFolderPermissionService folderPermissionService,
+            ILogger<DocumentsController> logger,
+            IConfiguration configuration,
+            IHttpClientFactory httpClientFactory)
         {
             _context = context;
             _cloudinaryService = cloudinaryService;
             _notificationService = notificationService;
+            _folderPermissionService = folderPermissionService;
             _logger = logger;
             _httpClient = httpClientFactory.CreateClient();
             _maxFileSize = configuration.GetValue<long>("MaxFileSize", 10 * 1024 * 1024); // Default to 10MB
@@ -174,6 +183,7 @@ namespace DocShareAPI.Controllers.Auth
 
             IFormFile fileToUpload = file;
             MemoryStream? pdfStream = null;
+            ImageUploadResult? uploadResult = null;
 
             try
             {
@@ -201,7 +211,7 @@ namespace DocShareAPI.Controllers.Auth
                 }
 
                 // Upload to Cloudinary
-                var uploadResult = await UploadToCloudinary(fileToUpload);
+                uploadResult = await UploadToCloudinary(fileToUpload);
                 if (uploadResult == null || uploadResult.Error != null)
                 {
                     var errorMessage = uploadResult?.Error?.Message ?? "Lỗi không xác định trong quá trình tải lên";
@@ -209,22 +219,31 @@ namespace DocShareAPI.Controllers.Auth
                     return StatusCode(500, $"Tải lên thất bại: {errorMessage}");
                 }
 
-                var newDoc = await CreateDocumentRecord(fileToUpload, decodedTokenResponse.userID, uploadResult);
+                Documents? newDoc = null;
+                var strategy = _context.Database.CreateExecutionStrategy();
 
-                await _notificationService.CreateAsync(
-                    recipientUserId: decodedTokenResponse.userID,
-                    type: "DOCUMENT_UPLOADED",
-                    title: "Tải tài liệu thành công",
-                    message: $"Tài liệu \"{newDoc.Title}\" đã được tải lên.",
-                    relatedDocumentId: newDoc.document_id,
-                    targetUrl: $"/documents/{newDoc.document_id}");
+                await strategy.ExecuteAsync(async () =>
+                {
+                    await using var transaction = await _context.Database.BeginTransactionAsync();
+                    newDoc = await CreateDocumentRecord(fileToUpload, decodedTokenResponse.userID, uploadResult);
+
+                    await _notificationService.CreateAsync(
+                        recipientUserId: decodedTokenResponse.userID,
+                        type: "DOCUMENT_UPLOADED",
+                        title: "Tải tài liệu thành công",
+                        message: $"Tài liệu \"{newDoc.Title}\" đã được tải lên.",
+                        relatedDocumentId: newDoc.document_id,
+                        targetUrl: $"/documents/{newDoc.document_id}");
+
+                    await transaction.CommitAsync();
+                });
 
                 return Ok(new
                 {
                     message = "Tải tài liệu lên thành công.",
                     success = true,
-                    newDoc.document_id,
-                    newDoc.Title,
+                    newDoc!.document_id,
+                    title = newDoc.Title,
                     newDoc.thumbnail_url,
                     newDoc.file_url
                 });
@@ -232,11 +251,182 @@ namespace DocShareAPI.Controllers.Auth
             catch (Exception ex)
             {
                 _logger.LogError($"Upload process failed: {ex.Message}");
+                if (uploadResult?.PublicId != null)
+                {
+                    await DeleteFromCloudinary(uploadResult.PublicId);
+                }
                 return StatusCode(500, "Đã xảy ra lỗi trong quá trình tải tài liệu lên.");
             }
             finally
             {
                 // Clean up the MemoryStream if it was created
+                pdfStream?.Dispose();
+            }
+        }
+
+        [HttpPost("/api/folders/{folderId:int}/upload-document")]
+        [HttpPost("upload-document-to-folder/{folderId:int}")]
+        public async Task<ActionResult> UploadDocumentToFolder(int folderId, IFormFile file)
+        {
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
+            {
+                return Unauthorized("Token xác thực không hợp lệ hoặc bị thiếu.");
+            }
+
+            if (file == null || file.Length == 0)
+            {
+                _logger.LogWarning("Chưa cung cấp file để tải lên thư mục.");
+                return BadRequest(new { success = false, code = "FILE_REQUIRED", message = "Vui lòng chọn tài liệu để tải lên." });
+            }
+
+            if (!IsValidDocument(file, out string validationMessage))
+            {
+                _logger.LogWarning($"Folder upload file validation failed: {validationMessage}");
+                return BadRequest(new { success = false, code = "INVALID_FILE", message = validationMessage });
+            }
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
+            if (user == null)
+            {
+                _logger.LogWarning($"Không tìm thấy người dùng.: {decodedToken.userID}");
+                return NotFound(new { success = false, code = "USER_NOT_FOUND", message = "Không tìm thấy người dùng." });
+            }
+
+            if (!user.is_verified)
+            {
+                return Forbid("Tải lên thất bại! Vui lòng xác thực tài khoản trong phần cài đặt.");
+            }
+
+            var folder = await _context.FOLDERS
+                .AsNoTracking()
+                .FirstOrDefaultAsync(f => f.folder_id == folderId);
+
+            if (folder == null)
+            {
+                return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục." });
+            }
+
+            if (!await _folderPermissionService.CanAddDocumentToFolderAsync(decodedToken.userID, folderId))
+            {
+                return Forbid();
+            }
+
+            IFormFile fileToUpload = file;
+            MemoryStream? pdfStream = null;
+            ImageUploadResult? uploadResult = null;
+
+            try
+            {
+                if (Path.GetExtension(file.FileName).ToLowerInvariant() == ".docx")
+                {
+                    using var inputStream = file.OpenReadStream();
+                    var doc = new Aspose.Words.Document(inputStream);
+                    pdfStream = new MemoryStream();
+                    doc.Save(pdfStream, Aspose.Words.SaveFormat.Pdf);
+                    pdfStream.Position = 0;
+
+                    fileToUpload = new FormFile(
+                        pdfStream,
+                        0,
+                        pdfStream.Length,
+                        file.Name,
+                        Path.ChangeExtension(file.FileName, ".pdf"))
+                    {
+                        Headers = file.Headers,
+                        ContentType = "application/pdf"
+                    };
+                }
+
+                uploadResult = await UploadToCloudinary(fileToUpload);
+                if (uploadResult == null || uploadResult.Error != null)
+                {
+                    var errorMessage = uploadResult?.Error?.Message ?? "Lỗi không xác định trong quá trình tải lên";
+                    _logger.LogError($"Cloudinary folder upload failed: {errorMessage}");
+                    return StatusCode(500, new { success = false, code = "CLOUDINARY_UPLOAD_FAILED", message = $"Tải lên thất bại: {errorMessage}" });
+                }
+
+                Documents? newDoc = null;
+                FolderDocuments? folderDocument = null;
+                var strategy = _context.Database.CreateExecutionStrategy();
+
+                await strategy.ExecuteAsync(async () =>
+                {
+                    await using var transaction = await _context.Database.BeginTransactionAsync();
+
+                    newDoc = await CreateDocumentRecord(fileToUpload, decodedToken.userID, uploadResult);
+                    folderDocument = new FolderDocuments
+                    {
+                        folder_id = folder.folder_id,
+                        document_id = newDoc.document_id,
+                        added_by_user_id = decodedToken.userID,
+                        added_at = DateTime.UtcNow
+                    };
+
+                    _context.FOLDER_DOCUMENTS.Add(folderDocument);
+                    await _context.SaveChangesAsync();
+
+                    await _notificationService.CreateAsync(
+                        recipientUserId: decodedToken.userID,
+                        type: "DOCUMENT_UPLOADED",
+                        title: "Tải tài liệu vào thư mục thành công",
+                        message: $"Tài liệu \"{newDoc.Title}\" đã được tải lên thư mục \"{folder.name}\".",
+                        relatedDocumentId: newDoc.document_id,
+                        relatedFolderId: folder.folder_id,
+                        targetUrl: $"/library/folders/{folder.folder_id}/documents",
+                        metadata: new { folder_id = folder.folder_id, document_id = newDoc.document_id });
+
+                    if (folder.owner_user_id != decodedToken.userID)
+                    {
+                        await _notificationService.CreateAsync(
+                            recipientUserId: folder.owner_user_id,
+                            actorUserId: decodedToken.userID,
+                            type: "folder_document_added",
+                            title: "Có tài liệu mới trong thư mục",
+                            message: $"Tài liệu \"{newDoc.Title}\" đã được thêm vào thư mục \"{folder.name}\".",
+                            relatedDocumentId: newDoc.document_id,
+                            relatedFolderId: folder.folder_id,
+                            targetUrl: $"/library/folders/{folder.folder_id}/documents",
+                            metadata: new { folder_id = folder.folder_id, document_id = newDoc.document_id });
+                    }
+
+                    await transaction.CommitAsync();
+                });
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Tải tài liệu vào thư mục thành công.",
+                    document_id = newDoc!.document_id,
+                    folder_id = folder.folder_id,
+                    added_to_folder = true,
+                    title = newDoc.Title,
+                    thumbnail_url = newDoc.thumbnail_url,
+                    file_url = newDoc.file_url,
+                    file_type = newDoc.file_type,
+                    file_size = newDoc.file_size,
+                    pages = newDoc.pages,
+                    uploaded_at = newDoc.uploaded_at,
+                    folder_document = new
+                    {
+                        folderDocument!.folder_id,
+                        folderDocument.document_id,
+                        folderDocument.added_by_user_id,
+                        folderDocument.added_at
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Folder upload process failed: {ex.Message}");
+                if (uploadResult?.PublicId != null)
+                {
+                    await DeleteFromCloudinary(uploadResult.PublicId);
+                }
+
+                return StatusCode(500, new { success = false, code = "FOLDER_DOCUMENT_UPLOAD_FAILED", message = "Đã xảy ra lỗi trong quá trình tải tài liệu vào thư mục." });
+            }
+            finally
+            {
                 pdfStream?.Dispose();
             }
         }
@@ -325,6 +515,52 @@ namespace DocShareAPI.Controllers.Auth
             document.Description = documents.description;
             document.is_public = documents.is_public;
 
+            var folderMetadataAllowed = await _context.FOLDER_DOCUMENTS
+                .AnyAsync(fd => fd.document_id == document.document_id);
+
+            if (documents.folder_id.HasValue)
+            {
+                var folderExists = await _context.FOLDERS.AnyAsync(f => f.folder_id == documents.folder_id.Value);
+                if (!folderExists)
+                {
+                    return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục." });
+                }
+
+                var existingFolderId = await _context.FOLDER_DOCUMENTS
+                    .Where(fd => fd.document_id == document.document_id)
+                    .Select(fd => (int?)fd.folder_id)
+                    .FirstOrDefaultAsync();
+
+                if (existingFolderId.HasValue && existingFolderId.Value != documents.folder_id.Value)
+                {
+                    return Conflict(new
+                    {
+                        success = false,
+                        code = "DOCUMENT_ALREADY_IN_FOLDER",
+                        message = "Tài liệu đã nằm trong một thư mục khác.",
+                        folder_id = existingFolderId.Value
+                    });
+                }
+
+                if (!existingFolderId.HasValue)
+                {
+                    if (!await _folderPermissionService.CanAddDocumentToFolderAsync(decodedToken.userID, documents.folder_id.Value))
+                    {
+                        return Forbid();
+                    }
+
+                    _context.FOLDER_DOCUMENTS.Add(new FolderDocuments
+                    {
+                        folder_id = documents.folder_id.Value,
+                        document_id = document.document_id,
+                        added_by_user_id = decodedToken.userID,
+                        added_at = DateTime.UtcNow
+                    });
+                }
+
+                folderMetadataAllowed = true;
+            }
+
             // TAGS
             // =========================
             if (documents.tags != null)
@@ -382,11 +618,34 @@ namespace DocShareAPI.Controllers.Auth
                     .Distinct()
                     .ToList();
 
-                // Validate category tồn tại
-                var validCategoryIds = await _context.CATEGORIES
-                    .Where(c => categoryIds.Contains(c.category_id))
-                    .Select(c => c.category_id)
-                    .ToListAsync();
+                if (categoryIds.Count == 0 && !folderMetadataAllowed)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        code = "CATEGORY_REQUIRED",
+                        message = "Vui lòng chọn ít nhất một danh mục cho tài liệu không thuộc thư mục."
+                    });
+                }
+
+                var validCategoryIds = categoryIds.Count == 0
+                    ? new List<string>()
+                    : await _context.CATEGORIES
+                        .Where(c => categoryIds.Contains(c.category_id))
+                        .Select(c => c.category_id)
+                        .ToListAsync();
+
+                var invalidCategoryIds = categoryIds.Except(validCategoryIds).ToList();
+                if (invalidCategoryIds.Count > 0)
+                {
+                    return UnprocessableEntity(new
+                    {
+                        success = false,
+                        code = "INVALID_CATEGORY",
+                        message = "Một hoặc nhiều danh mục không hợp lệ.",
+                        invalid_category_ids = invalidCategoryIds
+                    });
+                }
 
                 var documentCategories = validCategoryIds.Select(catId => new DocumentCategories
                 {
@@ -415,7 +674,10 @@ namespace DocShareAPI.Controllers.Auth
 
 
         [HttpDelete("delete-document")]
-        public async Task<ActionResult> DeleteDocument(int documentID)
+        public async Task<ActionResult> DeleteDocument(
+            [FromBody] DeleteDocumentsDTO? request,
+            [FromQuery] int? documentID = null,
+            [FromQuery] List<int>? document_ids = null)
         {
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedTokenResponse == null)
@@ -423,31 +685,136 @@ namespace DocShareAPI.Controllers.Auth
                 return Unauthorized();
             }
 
-            var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
-            if (document == null)
-            {
-                return NotFound(new { message = "Không tìm thấy tài liệu." });
-            }
+            var requestedIds = new List<int>();
+            if (request?.document_ids != null)
+                requestedIds.AddRange(request.document_ids);
+            if (document_ids != null)
+                requestedIds.AddRange(document_ids);
+            if (documentID.HasValue)
+                requestedIds.Add(documentID.Value);
 
-            if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
-            {
-                return Forbid();
-            }
+            requestedIds = requestedIds
+                .Where(id => id > 0)
+                .Distinct()
+                .ToList();
 
-            var result = await DeleteFromCloudinary(document.public_id);
-            if (result.Deleted != null && result.Deleted.ContainsKey(document.public_id))
+            if (requestedIds.Count == 0)
             {
-                _context.DOCUMENTS.Remove(document);
-                await _context.SaveChangesAsync();
-
-                return Ok(new
+                return BadRequest(new
                 {
-                    message = $"Đã xóa thành công: {document.Title}",
-                    success = true
+                    success = false,
+                    code = "DOCUMENT_IDS_REQUIRED",
+                    message = "Vui lòng truyền danh sách document_ids cần xóa.",
+                    expected_body = new { document_ids = new[] { 10, 11, 12 } },
+                    legacy_query = "/api/Documents/delete-document?documentID=10"
                 });
             }
 
-            return BadRequest(new { message = "Không thể xóa tài liệu khỏi Cloudinary." });
+            var documents = await _context.DOCUMENTS
+                .Where(d => requestedIds.Contains(d.document_id))
+                .ToListAsync();
+
+            var foundIds = documents.Select(d => d.document_id).ToHashSet();
+            var notFoundIds = requestedIds.Where(id => !foundIds.Contains(id)).ToList();
+            var isAdmin = string.Equals(decodedTokenResponse.roleID, "admin", StringComparison.OrdinalIgnoreCase);
+            var forbiddenIds = documents
+                .Where(d => !isAdmin && d.user_id != decodedTokenResponse.userID)
+                .Select(d => d.document_id)
+                .ToList();
+
+            var deletableDocuments = documents
+                .Where(d => isAdmin || d.user_id == decodedTokenResponse.userID)
+                .ToList();
+
+            if (deletableDocuments.Count == 0)
+            {
+                var statusCode = forbiddenIds.Count > 0 ? StatusCodes.Status403Forbidden : StatusCodes.Status404NotFound;
+                return StatusCode(statusCode, new
+                {
+                    success = false,
+                    code = forbiddenIds.Count > 0 ? "DOCUMENT_DELETE_FORBIDDEN" : "DOCUMENT_NOT_FOUND",
+                    message = forbiddenIds.Count > 0
+                        ? "Bạn không có quyền xóa các tài liệu đã chọn."
+                        : "Không tìm thấy tài liệu nào để xóa.",
+                    requested_document_ids = requestedIds,
+                    deleted_document_ids = Array.Empty<int>(),
+                    not_found_document_ids = notFoundIds,
+                    forbidden_document_ids = forbiddenIds
+                });
+            }
+
+            var remoteDeleteFailures = new List<object>();
+            var deletedDocuments = new List<Documents>();
+
+            foreach (var document in deletableDocuments)
+            {
+                if (string.IsNullOrWhiteSpace(document.public_id))
+                {
+                    deletedDocuments.Add(document);
+                    continue;
+                }
+
+                try
+                {
+                    var result = await DeleteFromCloudinary(document.public_id);
+                    if (result.Deleted != null && result.Deleted.ContainsKey(document.public_id))
+                    {
+                        deletedDocuments.Add(document);
+                        continue;
+                    }
+
+                    remoteDeleteFailures.Add(new
+                    {
+                        document_id = document.document_id,
+                        title = document.Title,
+                        reason = "Không thể xóa tài liệu khỏi Cloudinary."
+                    });
+                }
+                catch (Exception ex)
+                {
+                    remoteDeleteFailures.Add(new
+                    {
+                        document_id = document.document_id,
+                        title = document.Title,
+                        reason = ex.Message
+                    });
+                }
+            }
+
+            if (deletedDocuments.Count > 0)
+            {
+                var deletedIds = deletedDocuments.Select(d => d.document_id).ToList();
+                await DeleteDocumentRelations(deletedIds);
+                _context.DOCUMENTS.RemoveRange(deletedDocuments);
+                await _context.SaveChangesAsync();
+            }
+
+            var deletedDocumentData = deletedDocuments.Select(d => new
+            {
+                d.document_id,
+                title = d.Title,
+                d.thumbnail_url
+            }).ToList();
+
+            var hasFailures = notFoundIds.Count > 0 || forbiddenIds.Count > 0 || remoteDeleteFailures.Count > 0;
+
+            return Ok(new
+            {
+                success = !hasFailures,
+                partial_success = deletedDocuments.Count > 0 && hasFailures,
+                message = hasFailures
+                    ? "Đã xử lý yêu cầu xóa tài liệu, một số tài liệu không thể xóa."
+                    : "Đã xóa tài liệu thành công.",
+                requested_count = requestedIds.Count,
+                deleted_count = deletedDocuments.Count,
+                failed_count = requestedIds.Count - deletedDocuments.Count,
+                requested_document_ids = requestedIds,
+                deleted_document_ids = deletedDocuments.Select(d => d.document_id).ToList(),
+                deleted_documents = deletedDocumentData,
+                not_found_document_ids = notFoundIds,
+                forbidden_document_ids = forbiddenIds,
+                failed_documents = remoteDeleteFailures
+            });
         }
 
         [HttpGet("download-document/{documentID}")]
@@ -640,6 +1007,20 @@ namespace DocShareAPI.Controllers.Auth
             };
 
             return await _cloudinaryService.Cloudinary.DeleteResourcesAsync(deleteParams);
+        }
+
+        private async Task DeleteDocumentRelations(IEnumerable<int> documentIds)
+        {
+            var ids = documentIds.Distinct().ToList();
+            if (ids.Count == 0)
+                return;
+
+            await _context.FOLDER_DOCUMENTS.Where(fd => ids.Contains(fd.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_CATEGORIES.Where(dc => ids.Contains(dc.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_TAGS.Where(dt => ids.Contains(dt.document_id)).ExecuteDeleteAsync();
+            await _context.COLLECTION_DOCUMENTS.Where(cd => ids.Contains(cd.document_id)).ExecuteDeleteAsync();
+            await _context.LIKES.Where(l => ids.Contains(l.document_id)).ExecuteDeleteAsync();
+            await _context.REPORTS.Where(r => ids.Contains(r.document_id)).ExecuteDeleteAsync();
         }
         //Loại bỏ dấu tiếng việt
         public static string RemoveDiacritics(string text)

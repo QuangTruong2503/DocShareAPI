@@ -22,6 +22,10 @@ namespace DocShareAPI.Data
         public DbSet<Tokens> TOKENS { get; set; }
         public DbSet<Likes> LIKES { get; set; }
         public DbSet<Notifications> NOTIFICATIONS { get; set; }
+        public DbSet<Folders> FOLDERS { get; set; }
+        public DbSet<FolderDocuments> FOLDER_DOCUMENTS { get; set; }
+        public DbSet<FolderMembers> FOLDER_MEMBERS { get; set; }
+        public DbSet<FolderInvites> FOLDER_INVITES { get; set; }
         public DbSet<SeoSettings> SEO_SETTINGS { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -122,8 +126,122 @@ namespace DocShareAPI.Data
                 .HasIndex(n => n.related_report_id)
                 .HasDatabaseName("IX_NOTIFICATIONS_related_report_id");
             modelBuilder.Entity<Notifications>()
+                .HasIndex(n => n.related_folder_id)
+                .HasDatabaseName("IX_NOTIFICATIONS_related_folder_id");
+            modelBuilder.Entity<Notifications>()
                 .HasIndex(n => n.type)
                 .HasDatabaseName("IX_NOTIFICATIONS_type");
+            modelBuilder.Entity<Folders>()
+                .Property(f => f.folder_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<Folders>()
+                .Property(f => f.name)
+                .HasMaxLength(150);
+            modelBuilder.Entity<Folders>()
+                .Property(f => f.visibility)
+                .HasMaxLength(20)
+                .HasDefaultValue("private");
+            modelBuilder.Entity<Folders>()
+                .Property(f => f.created_at)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            modelBuilder.Entity<Folders>()
+                .Property(f => f.updated_at)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            modelBuilder.Entity<Folders>()
+                .HasIndex(f => new { f.owner_user_id, f.parent_folder_id, f.name })
+                .HasDatabaseName("UQ_FOLDERS_owner_parent_name")
+                .IsUnique();
+            modelBuilder.Entity<Folders>()
+                .HasOne(f => f.OwnerUser)
+                .WithMany()
+                .HasForeignKey(f => f.owner_user_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<Folders>()
+                .HasOne(f => f.ParentFolder)
+                .WithMany(f => f.ChildFolders)
+                .HasForeignKey(f => f.parent_folder_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<FolderDocuments>()
+                .HasKey(fd => new { fd.folder_id, fd.document_id });
+            modelBuilder.Entity<FolderDocuments>()
+                .HasIndex(fd => fd.document_id)
+                .HasDatabaseName("UQ_FOLDER_DOCUMENTS_document_id")
+                .IsUnique();
+            modelBuilder.Entity<FolderDocuments>()
+                .HasOne(fd => fd.Folder)
+                .WithMany(f => f.FolderDocuments)
+                .HasForeignKey(fd => fd.folder_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<FolderDocuments>()
+                .HasOne(fd => fd.Document)
+                .WithMany()
+                .HasForeignKey(fd => fd.document_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<FolderDocuments>()
+                .HasOne(fd => fd.AddedByUser)
+                .WithMany()
+                .HasForeignKey(fd => fd.added_by_user_id)
+                .OnDelete(DeleteBehavior.Restrict);
+            modelBuilder.Entity<FolderMembers>()
+                .HasKey(fm => new { fm.folder_id, fm.user_id });
+            modelBuilder.Entity<FolderMembers>()
+                .Property(fm => fm.role)
+                .HasMaxLength(20);
+            modelBuilder.Entity<FolderMembers>()
+                .HasIndex(fm => fm.user_id);
+            modelBuilder.Entity<FolderMembers>()
+                .HasOne(fm => fm.Folder)
+                .WithMany(f => f.FolderMembers)
+                .HasForeignKey(fm => fm.folder_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<FolderMembers>()
+                .HasOne(fm => fm.User)
+                .WithMany()
+                .HasForeignKey(fm => fm.user_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<FolderMembers>()
+                .HasOne(fm => fm.InvitedByUser)
+                .WithMany()
+                .HasForeignKey(fm => fm.invited_by_user_id)
+                .OnDelete(DeleteBehavior.SetNull);
+            modelBuilder.Entity<FolderInvites>()
+                .Property(fi => fi.invite_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<FolderInvites>()
+                .Property(fi => fi.role)
+                .HasMaxLength(20);
+            modelBuilder.Entity<FolderInvites>()
+                .Property(fi => fi.status)
+                .HasMaxLength(20)
+                .HasDefaultValue("pending");
+            modelBuilder.Entity<FolderInvites>()
+                .Property(fi => fi.token)
+                .HasMaxLength(128);
+            modelBuilder.Entity<FolderInvites>()
+                .Property(fi => fi.invitee_email)
+                .HasMaxLength(255);
+            modelBuilder.Entity<FolderInvites>()
+                .HasIndex(fi => fi.token)
+                .IsUnique();
+            modelBuilder.Entity<FolderInvites>()
+                .HasIndex(fi => new { fi.folder_id, fi.status, fi.invitee_user_id });
+            modelBuilder.Entity<FolderInvites>()
+                .HasIndex(fi => new { fi.folder_id, fi.status, fi.invitee_email });
+            modelBuilder.Entity<FolderInvites>()
+                .HasOne(fi => fi.Folder)
+                .WithMany(f => f.FolderInvites)
+                .HasForeignKey(fi => fi.folder_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<FolderInvites>()
+                .HasOne(fi => fi.InviterUser)
+                .WithMany()
+                .HasForeignKey(fi => fi.inviter_user_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<FolderInvites>()
+                .HasOne(fi => fi.InviteeUser)
+                .WithMany()
+                .HasForeignKey(fi => fi.invitee_user_id)
+                .OnDelete(DeleteBehavior.SetNull);
             modelBuilder.Entity<Likes>()
                 .HasIndex(l => new { l.user_id, l.document_id })
                 .IsUnique();
@@ -189,6 +307,12 @@ namespace DocShareAPI.Data
                 .WithMany()
                 .HasForeignKey(n => n.related_report_id)
                 .HasConstraintName("FK_NOTIFICATIONS_report")
+                .OnDelete(DeleteBehavior.SetNull);
+            modelBuilder.Entity<Notifications>()
+                .HasOne(n => n.RelatedFolder)
+                .WithMany()
+                .HasForeignKey(n => n.related_folder_id)
+                .HasConstraintName("FK_NOTIFICATIONS_folder")
                 .OnDelete(DeleteBehavior.SetNull);
 
             // Cấu hình mối quan hệ Collections -> Users
