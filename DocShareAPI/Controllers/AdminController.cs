@@ -224,7 +224,7 @@ namespace DocShareAPI.Controllers
                 .FirstOrDefaultAsync();
 
             if (user == null)
-                return NotFound(new { success = false, message = "User not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
             var recentDocuments = await _context.DOCUMENTS
                 .AsNoTracking()
@@ -261,7 +261,7 @@ namespace DocShareAPI.Controllers
 
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userId);
             if (user == null)
-                return NotFound(new { success = false, message = "User not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
             var changes = new List<string>();
 
@@ -269,10 +269,10 @@ namespace DocShareAPI.Controllers
             {
                 var role = request.Role.Trim().ToLowerInvariant();
                 if (role is not ("admin" or "user"))
-                    return BadRequest(new { success = false, message = "Role must be admin or user." });
+                    return BadRequest(new { success = false, message = "Vai trò phải là admin hoặc user." });
 
                 if (user.user_id == adminToken!.userID && role != "admin")
-                    return BadRequest(new { success = false, message = "Admin cannot remove their own admin role." });
+                    return BadRequest(new { success = false, message = "Quản trị viên không thể tự gỡ quyền admin của chính mình." });
 
                 if (user.Role != role)
                 {
@@ -326,7 +326,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "User updated successfully.",
+                message = "Cập nhật người dùng thành công.",
                 data = new
                 {
                     user.user_id,
@@ -348,11 +348,11 @@ namespace DocShareAPI.Controllers
                 return error!;
 
             if (adminToken!.userID == userId)
-                return BadRequest(new { success = false, message = "Admin cannot delete their own account." });
+                return BadRequest(new { success = false, message = "Quản trị viên không thể tự xóa tài khoản của chính mình." });
 
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == userId);
             if (user == null)
-                return NotFound(new { success = false, message = "User not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
             var userDocumentIds = await _context.DOCUMENTS
                 .Where(d => d.user_id == userId)
@@ -394,7 +394,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "User deleted successfully.",
+                message = "Xóa người dùng thành công.",
                 deletedUserId = userId
             });
         }
@@ -525,7 +525,7 @@ namespace DocShareAPI.Controllers
                 .FirstOrDefaultAsync();
 
             if (document == null)
-                return NotFound(new { success = false, message = "Document not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy tài liệu." });
 
             var reports = await _context.REPORTS
                 .AsNoTracking()
@@ -570,14 +570,14 @@ namespace DocShareAPI.Controllers
                 .FirstOrDefaultAsync(d => d.document_id == documentId);
 
             if (document == null)
-                return NotFound(new { success = false, message = "Document not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy tài liệu." });
 
             var changes = new List<string>();
 
             if (request.Title != null)
             {
                 if (string.IsNullOrWhiteSpace(request.Title))
-                    return BadRequest(new { success = false, message = "Title cannot be empty." });
+                    return BadRequest(new { success = false, message = "Tiêu đề không được để trống." });
 
                 var title = request.Title.Trim();
                 if (document.Title != title)
@@ -709,7 +709,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Document updated successfully.",
+                message = "Cập nhật tài liệu thành công.",
                 document_id = documentId
             });
         }
@@ -722,7 +722,7 @@ namespace DocShareAPI.Controllers
 
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentId);
             if (document == null)
-                return NotFound(new { success = false, message = "Document not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy tài liệu." });
 
             var ownerId = document.user_id;
             var documentTitle = document.Title;
@@ -762,7 +762,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Document deleted successfully.",
+                message = "Xóa tài liệu thành công.",
                 deletedDocumentId = documentId
             });
         }
@@ -808,22 +808,22 @@ namespace DocShareAPI.Controllers
                 return error!;
 
             if (string.IsNullOrWhiteSpace(request.Name))
-                return BadRequest(new { success = false, message = "Name is required." });
+                return BadRequest(new { success = false, message = "Tên là bắt buộc." });
 
             var categoryId = string.IsNullOrWhiteSpace(request.CategoryId)
                 ? NormalizeId(request.Name)
                 : NormalizeId(request.CategoryId);
 
             if (string.IsNullOrWhiteSpace(categoryId))
-                return BadRequest(new { success = false, message = "Category id is invalid." });
+                return BadRequest(new { success = false, message = "ID danh mục không hợp lệ." });
 
             if (await _context.CATEGORIES.AnyAsync(c => c.category_id == categoryId))
-                return Conflict(new { success = false, message = "Category already exists." });
+                return Conflict(new { success = false, message = "Danh mục đã tồn tại." });
 
             if (!string.IsNullOrWhiteSpace(request.ParentId) &&
                 !await _context.CATEGORIES.AnyAsync(c => c.category_id == request.ParentId))
             {
-                return BadRequest(new { success = false, message = "Parent category does not exist." });
+                return BadRequest(new { success = false, message = "Danh mục cha không tồn tại." });
             }
 
             var category = new Categories
@@ -840,7 +840,7 @@ namespace DocShareAPI.Controllers
             return CreatedAtAction(nameof(GetCategories), new
             {
                 success = true,
-                message = "Category created successfully.",
+                message = "Tạo danh mục thành công.",
                 data = category
             });
         }
@@ -853,12 +853,12 @@ namespace DocShareAPI.Controllers
 
             var category = await _context.CATEGORIES.FirstOrDefaultAsync(c => c.category_id == categoryId);
             if (category == null)
-                return NotFound(new { success = false, message = "Category not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy danh mục." });
 
             if (request.Name != null)
             {
                 if (string.IsNullOrWhiteSpace(request.Name))
-                    return BadRequest(new { success = false, message = "Name cannot be empty." });
+                    return BadRequest(new { success = false, message = "Tên không được để trống." });
 
                 category.Name = request.Name.Trim();
             }
@@ -870,10 +870,10 @@ namespace DocShareAPI.Controllers
             {
                 var parentId = string.IsNullOrWhiteSpace(request.ParentId) ? null : request.ParentId.Trim();
                 if (parentId == categoryId)
-                    return BadRequest(new { success = false, message = "Category cannot be its own parent." });
+                    return BadRequest(new { success = false, message = "Danh mục không thể là danh mục cha của chính nó." });
 
                 if (parentId != null && !await _context.CATEGORIES.AnyAsync(c => c.category_id == parentId))
-                    return BadRequest(new { success = false, message = "Parent category does not exist." });
+                    return BadRequest(new { success = false, message = "Danh mục cha không tồn tại." });
 
                 category.parent_id = parentId;
             }
@@ -883,7 +883,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Category updated successfully.",
+                message = "Cập nhật danh mục thành công.",
                 data = category
             });
         }
@@ -896,7 +896,7 @@ namespace DocShareAPI.Controllers
 
             var category = await _context.CATEGORIES.FirstOrDefaultAsync(c => c.category_id == categoryId);
             if (category == null)
-                return NotFound(new { success = false, message = "Category not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy danh mục." });
 
             await _context.DOCUMENT_CATEGORIES
                 .Where(dc => dc.category_id == categoryId)
@@ -915,7 +915,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Category deleted successfully.",
+                message = "Xóa danh mục thành công.",
                 deletedCategoryId = categoryId
             });
         }
@@ -956,14 +956,14 @@ namespace DocShareAPI.Controllers
                 return error!;
 
             if (string.IsNullOrWhiteSpace(request.Name))
-                return BadRequest(new { success = false, message = "Name is required." });
+                return BadRequest(new { success = false, message = "Tên là bắt buộc." });
 
             var tagId = string.IsNullOrWhiteSpace(request.TagId)
                 ? NormalizeId(request.Name)
                 : NormalizeId(request.TagId);
 
             if (await _context.TAGS.AnyAsync(t => t.tag_id == tagId))
-                return Conflict(new { success = false, message = "Tag already exists." });
+                return Conflict(new { success = false, message = "Thẻ đã tồn tại." });
 
             var tag = new Tags
             {
@@ -977,7 +977,7 @@ namespace DocShareAPI.Controllers
             return CreatedAtAction(nameof(GetTags), new
             {
                 success = true,
-                message = "Tag created successfully.",
+                message = "Tạo thẻ thành công.",
                 data = tag
             });
         }
@@ -990,10 +990,10 @@ namespace DocShareAPI.Controllers
 
             var tag = await _context.TAGS.FirstOrDefaultAsync(t => t.tag_id == tagId);
             if (tag == null)
-                return NotFound(new { success = false, message = "Tag not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy thẻ." });
 
             if (string.IsNullOrWhiteSpace(request.Name))
-                return BadRequest(new { success = false, message = "Name is required." });
+                return BadRequest(new { success = false, message = "Tên là bắt buộc." });
 
             tag.Name = request.Name.Trim();
             await _context.SaveChangesAsync();
@@ -1001,7 +1001,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Tag updated successfully.",
+                message = "Cập nhật thẻ thành công.",
                 data = tag
             });
         }
@@ -1014,7 +1014,7 @@ namespace DocShareAPI.Controllers
 
             var tag = await _context.TAGS.FirstOrDefaultAsync(t => t.tag_id == tagId);
             if (tag == null)
-                return NotFound(new { success = false, message = "Tag not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy thẻ." });
 
             await _context.DOCUMENT_TAGS
                 .Where(dt => dt.tag_id == tagId)
@@ -1026,7 +1026,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Tag deleted successfully.",
+                message = "Xóa thẻ thành công.",
                 deletedTagId = tagId
             });
         }
@@ -1122,7 +1122,7 @@ namespace DocShareAPI.Controllers
                 .FirstOrDefaultAsync();
 
             if (report == null)
-                return NotFound(new { success = false, message = "Report not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy báo cáo." });
 
             return Ok(new { success = true, data = report });
         }
@@ -1134,17 +1134,17 @@ namespace DocShareAPI.Controllers
                 return error!;
 
             if (string.IsNullOrWhiteSpace(request.Status))
-                return BadRequest(new { success = false, message = "Status is required." });
+                return BadRequest(new { success = false, message = "Trạng thái là bắt buộc." });
 
             var allowedStatuses = new[] { "Chờ giải quyết", "Đang xử lý", "Đã xử lý", "Từ chối" };
             if (!allowedStatuses.Contains(request.Status))
-                return BadRequest(new { success = false, message = "Status is invalid." });
+                return BadRequest(new { success = false, message = "Trạng thái không hợp lệ." });
 
             var report = await _context.REPORTS
                 .Include(r => r.Documents)
                 .FirstOrDefaultAsync(r => r.report_id == reportId);
             if (report == null)
-                return NotFound(new { success = false, message = "Report not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy báo cáo." });
 
             var oldStatus = report.Status;
             report.Status = request.Status;
@@ -1167,7 +1167,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Report status updated successfully.",
+                message = "Cập nhật trạng thái báo cáo thành công.",
                 data = new
                 {
                     report.report_id,
@@ -1184,7 +1184,7 @@ namespace DocShareAPI.Controllers
 
             var report = await _context.REPORTS.FirstOrDefaultAsync(r => r.report_id == reportId);
             if (report == null)
-                return NotFound(new { success = false, message = "Report not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy báo cáo." });
 
             _context.REPORTS.Remove(report);
             await _context.SaveChangesAsync();
@@ -1192,7 +1192,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Report deleted successfully.",
+                message = "Xóa báo cáo thành công.",
                 deletedReportId = reportId
             });
         }
@@ -1277,7 +1277,7 @@ namespace DocShareAPI.Controllers
                 .FirstOrDefaultAsync();
 
             if (collection == null)
-                return NotFound(new { success = false, message = "Collection not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy bộ sưu tập." });
 
             var documents = await _context.COLLECTION_DOCUMENTS
                 .AsNoTracking()
@@ -1316,7 +1316,7 @@ namespace DocShareAPI.Controllers
 
             var collection = await _context.COLLECTIONS.FirstOrDefaultAsync(c => c.collection_id == collectionId);
             if (collection == null)
-                return NotFound(new { success = false, message = "Collection not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy bộ sưu tập." });
 
             await _context.COLLECTION_DOCUMENTS
                 .Where(cd => cd.collection_id == collectionId)
@@ -1328,7 +1328,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                message = "Collection deleted successfully.",
+                message = "Xóa bộ sưu tập thành công.",
                 deletedCollectionId = collectionId
             });
         }
@@ -1414,7 +1414,7 @@ namespace DocShareAPI.Controllers
             decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedToken == null)
             {
-                error = Unauthorized(new { success = false, message = "Authentication required." });
+                error = Unauthorized(new { success = false, message = "Bạn cần đăng nhập." });
                 return false;
             }
 

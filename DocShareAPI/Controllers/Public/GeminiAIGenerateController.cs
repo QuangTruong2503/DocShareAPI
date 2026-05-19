@@ -1,4 +1,4 @@
-﻿using DocShareAPI.Data;
+using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
@@ -52,12 +52,12 @@ namespace DocShareAPI.Controllers.Public
                 .FirstOrDefaultAsync();
 
             if (document == null)
-                return NotFound("Document not found.");
+                return NotFound("Không tìm thấy tài liệu.");
 
             if (!document.is_public)
             {
                 if (decodedToken == null)
-                    return Unauthorized(new { message = "Login required to summarize this document." });
+                    return Unauthorized(new { message = "Bạn cần đăng nhập để tóm tắt tài liệu này." });
 
                 bool canAccess = decodedToken.userID == document.user_id || decodedToken.roleID == "admin";
                 if (!canAccess)
@@ -65,7 +65,7 @@ namespace DocShareAPI.Controllers.Public
             }
 
             if (string.IsNullOrEmpty(document.file_url))
-                return BadRequest("Document URL is missing.");
+                return BadRequest("Thiếu URL tài liệu.");
 
             try
             {
@@ -81,7 +81,7 @@ namespace DocShareAPI.Controllers.Public
                 var summary = await GenerateContent(prompt);
 
                 if (string.IsNullOrWhiteSpace(summary))
-                    return StatusCode(500, "Gemini API failed to generate summary.");
+                return StatusCode(500, "Gemini API không thể tạo tóm tắt.");
 
                 return Ok(new
                 {
@@ -103,7 +103,7 @@ namespace DocShareAPI.Controllers.Public
         public async Task<IActionResult> ChatWithGemini([FromBody] AIChatRequest request)
         {
             if (string.IsNullOrEmpty(request.Message))
-                return BadRequest("Message is required.");
+                return BadRequest("Nội dung tin nhắn là bắt buộc.");
 
             try
             {
@@ -111,7 +111,7 @@ namespace DocShareAPI.Controllers.Public
                 var response = await GenerateContent(prompt);
 
                 if (string.IsNullOrWhiteSpace(response))
-                    return StatusCode(500, "Gemini API failed to generate response.");
+                return StatusCode(500, "Gemini API không thể tạo phản hồi.");
 
                 return Ok(new
                 {

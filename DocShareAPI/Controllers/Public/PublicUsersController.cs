@@ -46,7 +46,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (profile == null)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             return Ok(profile);
@@ -71,7 +71,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (user == null)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             var documents = await _context.DOCUMENTS
@@ -135,7 +135,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (user == null)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             var collections = await _context.COLLECTIONS
@@ -206,7 +206,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (collection == null)
             {
-                return NotFound(new { message = "Public collection not found." });
+                return NotFound(new { message = "Không tìm thấy bộ sưu tập công khai." });
             }
 
             var documents = await _context.COLLECTION_DOCUMENTS

@@ -1,4 +1,4 @@
-﻿using CloudinaryDotNet;
+using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject.Documents;
@@ -143,13 +143,13 @@ namespace DocShareAPI.Controllers.Auth
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedTokenResponse == null)
             {
-                return Unauthorized("Invalid or missing authentication token");
+                return Unauthorized("Token xác thực không hợp lệ hoặc bị thiếu.");
             }
 
             if (file == null || file.Length == 0)
             {
-                _logger.LogWarning("No file provided for upload");
-                return BadRequest("No file provided for upload");
+                _logger.LogWarning("Chưa cung cấp file để tải lên.");
+                return BadRequest("Chưa cung cấp file để tải lên.");
             }
 
             if (!IsValidDocument(file, out string validationMessage))
@@ -163,13 +163,13 @@ namespace DocShareAPI.Controllers.Auth
 
             if (user == null)
             {
-                _logger.LogWarning($"User not found: {decodedTokenResponse.userID}");
-                return NotFound("User not found");
+                _logger.LogWarning($"Không tìm thấy người dùng.: {decodedTokenResponse.userID}");
+                return NotFound("Không tìm thấy người dùng.");
             }
 
             if (!user.is_verified)
             {
-                return Forbid("Upload failed! Please verify your account in the settings.");
+                return Forbid("Tải lên thất bại! Vui lòng xác thực tài khoản trong phần cài đặt.");
             }
 
             IFormFile fileToUpload = file;
@@ -204,9 +204,9 @@ namespace DocShareAPI.Controllers.Auth
                 var uploadResult = await UploadToCloudinary(fileToUpload);
                 if (uploadResult == null || uploadResult.Error != null)
                 {
-                    var errorMessage = uploadResult?.Error?.Message ?? "Unknown error during upload";
+                    var errorMessage = uploadResult?.Error?.Message ?? "Lỗi không xác định trong quá trình tải lên";
                     _logger.LogError($"Cloudinary upload failed: {errorMessage}");
-                    return StatusCode(500, $"Upload failed: {errorMessage}");
+                    return StatusCode(500, $"Tải lên thất bại: {errorMessage}");
                 }
 
                 var newDoc = await CreateDocumentRecord(fileToUpload, decodedTokenResponse.userID, uploadResult);
@@ -221,7 +221,7 @@ namespace DocShareAPI.Controllers.Auth
 
                 return Ok(new
                 {
-                    message = "Document uploaded successfully",
+                    message = "Tải tài liệu lên thành công.",
                     success = true,
                     newDoc.document_id,
                     newDoc.Title,
@@ -232,7 +232,7 @@ namespace DocShareAPI.Controllers.Auth
             catch (Exception ex)
             {
                 _logger.LogError($"Upload process failed: {ex.Message}");
-                return StatusCode(500, "An error occurred during document upload");
+                return StatusCode(500, "Đã xảy ra lỗi trong quá trình tải tài liệu lên.");
             }
             finally
             {
@@ -255,7 +255,7 @@ namespace DocShareAPI.Controllers.Auth
                 var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentUpdate.document_id);
                 if (document == null)
                 {
-                    return NotFound(new { message = "Document not found" });
+                    return NotFound(new { message = "Không tìm thấy tài liệu." });
                 }
                 if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
                 {
@@ -283,7 +283,7 @@ namespace DocShareAPI.Controllers.Auth
                         document.uploaded_at,
                         document.is_public
                     },
-                    message = "Document updated successfully",
+                    message = "Cập nhật tài liệu thành công.",
                     success = true
                 });
             }
@@ -315,7 +315,7 @@ namespace DocShareAPI.Controllers.Auth
             {
                 return NotFound(new
                 {
-                    message = "Document not found or you don't have permission!"
+                    message = "Không tìm thấy tài liệu hoặc bạn không có quyền truy cập!"
                 });
             }
 
@@ -426,7 +426,7 @@ namespace DocShareAPI.Controllers.Auth
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
             if (document == null)
             {
-                return NotFound(new { message = "Document not found" });
+                return NotFound(new { message = "Không tìm thấy tài liệu." });
             }
 
             if (document.user_id != decodedTokenResponse.userID && decodedTokenResponse.roleID != "admin")
@@ -442,12 +442,12 @@ namespace DocShareAPI.Controllers.Auth
 
                 return Ok(new
                 {
-                    message = $"Successfully deleted: {document.Title}",
+                    message = $"Đã xóa thành công: {document.Title}",
                     success = true
                 });
             }
 
-            return BadRequest(new { message = "Failed to delete document from Cloudinary" });
+            return BadRequest(new { message = "Không thể xóa tài liệu khỏi Cloudinary." });
         }
 
         [HttpGet("download-document/{documentID}")]
@@ -464,7 +464,7 @@ namespace DocShareAPI.Controllers.Auth
                 var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentID);
                 if (document == null)
                 {
-                    return NotFound($"No document found with ID: {documentID}");
+                    return NotFound($"Không tìm thấy tài liệu có ID: {documentID}");
                 }
 
                 bool canDownload = document.is_public ||
@@ -518,19 +518,19 @@ namespace DocShareAPI.Controllers.Auth
 
             if (file == null || file.Length == 0)
             {
-                validationMessage = "Please select a document to upload.";
+                validationMessage = "Vui lòng chọn tài liệu để tải lên.";
                 return false;
             }
 
             if (file.Length > _maxFileSize)
             {
-                validationMessage = $"Document size {file.Length} exceeds maximum allowed size of {_maxFileSize / 1024 / 1024}MB.";
+                validationMessage = $"Dung lượng tài liệu {file.Length} vượt quá giới hạn cho phép {_maxFileSize / 1024 / 1024}MB.";
                 return false;
             }
 
             if (!_allowedDocumentTypes.Any(t => string.Equals(t, file.ContentType, StringComparison.OrdinalIgnoreCase)))
             {
-                validationMessage = $"Invalid document type: {file.ContentType}. Allowed types are: PDF, DOCX, TXT.";
+                validationMessage = $"Loại tài liệu không hợp lệ: {file.ContentType}. Các loại được phép: PDF, DOCX, TXT.";
                 return false;
             }
 
@@ -538,13 +538,13 @@ namespace DocShareAPI.Controllers.Auth
             var allowedExtensions = new[] { ".pdf", ".doc", ".docx", ".txt" };
             if (!allowedExtensions.Contains(extension))
             {
-                validationMessage = "Invalid document extension. Allowed extensions are: PDF, DOC, DOCX, TXT.";
+                validationMessage = "Phần mở rộng tài liệu không hợp lệ. Các phần mở rộng được phép: PDF, DOC, DOCX, TXT.";
                 return false;
             }
 
             if (!HasValidFileSignature(file, extension))
             {
-                validationMessage = "Document content does not match the uploaded file type.";
+                validationMessage = "Nội dung tài liệu không khớp với loại file đã tải lên.";
                 return false;
             }
 

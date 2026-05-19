@@ -1,4 +1,4 @@
-﻿using DocShareAPI.Data;
+using DocShareAPI.Data;
 using DocShareAPI.Helpers;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
@@ -61,7 +61,7 @@ public class TokenValidationMiddleware
                 if (!isPublicEndpoint)
                 {
                     context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                    await context.Response.WriteAsync("Invalid Authorization header format");
+                    await context.Response.WriteAsync("Định dạng header Authorization không hợp lệ.");
                     return;
                 }
             }
@@ -72,13 +72,13 @@ public class TokenValidationMiddleware
                     var decodedJson = _tokenServices.DecodeToken(token);
                     if (decodedJson == null)
                     {
-                        throw new UnauthorizedAccessException("Invalid token");
+                        throw new UnauthorizedAccessException("Token không hợp lệ.");
                     }
 
                     decodedToken = JsonSerializer.Deserialize<DecodedTokenResponse>(decodedJson);
                     if (decodedToken == null)
                     {
-                        throw new UnauthorizedAccessException("Invalid token payload");
+                        throw new UnauthorizedAccessException("Token không hợp lệ. payload");
                     }
 
                     // 🔹 2. Kiểm tra token trong DB
@@ -113,7 +113,7 @@ public class TokenValidationMiddleware
                     if (!isPublicEndpoint)
                     {
                         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                        await context.Response.WriteAsync("Invalid token");
+                        await context.Response.WriteAsync("Token không hợp lệ.");
                         return;
                     }
                 }
@@ -124,7 +124,7 @@ public class TokenValidationMiddleware
         if (!isPublicEndpoint && decodedToken == null)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsync("Authentication required");
+            await context.Response.WriteAsync("Bạn cần đăng nhập.");
             return;
         }
 

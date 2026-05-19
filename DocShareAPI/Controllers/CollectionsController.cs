@@ -1,4 +1,4 @@
-﻿using DocShareAPI.Data;
+using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
@@ -75,7 +75,7 @@ namespace DocShareAPI.Controllers
             var collection = await _context.COLLECTIONS.FindAsync(id);
             if (collection == null)
             {
-                return NotFound(new { message = $"Collection with ID {id} not found." });
+                return NotFound(new { message = $"Không tìm thấy bộ sưu tập có ID {id}." });
             }
 
             if (collection.user_id != decodedToken.userID && decodedToken.roleID != "admin")
@@ -115,7 +115,7 @@ namespace DocShareAPI.Controllers
             var collection = await _context.COLLECTIONS.FindAsync(id);
             if (collection == null)
             {
-                return NotFound(new { message = $"Collection with ID {id} not found." });
+                return NotFound(new { message = $"Không tìm thấy bộ sưu tập có ID {id}." });
             }
             if (collection.user_id != decodedToken.userID && decodedToken.roleID != "admin")
             {
@@ -179,7 +179,7 @@ namespace DocShareAPI.Controllers
 
             if (collection == null)
             {
-                return NotFound(new { message = $"Collection with ID {id} not found." });
+                return NotFound(new { message = $"Không tìm thấy bộ sưu tập có ID {id}." });
             }
 
             if (collection.user_id != decodedToken.userID && decodedToken.roleID != "admin")
@@ -228,7 +228,7 @@ namespace DocShareAPI.Controllers
 
             if (request.document_id <= 0)
             {
-                return BadRequest(new { message = "document_id is required." });
+                return BadRequest(new { message = "document_id là bắt buộc." });
             }
 
             var collection = await _context.COLLECTIONS
@@ -236,7 +236,7 @@ namespace DocShareAPI.Controllers
 
             if (collection == null)
             {
-                return NotFound(new { message = $"Collection with ID {id} not found." });
+                return NotFound(new { message = $"Không tìm thấy bộ sưu tập có ID {id}." });
             }
 
             if (collection.user_id != decodedToken.userID && decodedToken.roleID != "admin")
@@ -261,7 +261,7 @@ namespace DocShareAPI.Controllers
 
             if (document == null)
             {
-                return NotFound(new { message = "Document not found." });
+                return NotFound(new { message = "Không tìm thấy tài liệu." });
             }
 
             if (!CanAccessDocument(document.user_id, document.is_public, decodedToken))
@@ -274,7 +274,7 @@ namespace DocShareAPI.Controllers
 
             if (exists)
             {
-                return Conflict(new { message = "Document already exists in this collection." });
+                return Conflict(new { message = "Tài liệu đã tồn tại trong bộ sưu tập này." });
             }
 
             var collectionDocument = new CollectionDocuments
@@ -329,7 +329,7 @@ namespace DocShareAPI.Controllers
 
             if (collection == null)
             {
-                return NotFound(new { message = $"Collection with ID {id} not found." });
+                return NotFound(new { message = $"Không tìm thấy bộ sưu tập có ID {id}." });
             }
 
             if (collection.user_id != decodedToken.userID && decodedToken.roleID != "admin")
@@ -342,7 +342,7 @@ namespace DocShareAPI.Controllers
 
             if (collectionDocument == null)
             {
-                return NotFound(new { message = "Document is not in this collection." });
+                return NotFound(new { message = "Tài liệu không nằm trong bộ sưu tập này." });
             }
 
             _context.COLLECTION_DOCUMENTS.Remove(collectionDocument);

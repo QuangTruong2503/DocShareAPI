@@ -1,4 +1,4 @@
-﻿using DocShareAPI.Data;
+using DocShareAPI.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -30,7 +30,7 @@ namespace DocShareAPI.Controllers
         public async Task<IActionResult> SearchTags(string search)
         {
             if (string.IsNullOrWhiteSpace(search))
-                return BadRequest(new { message = "Search query is required." });
+                return BadRequest(new { message = "Từ khóa tìm kiếm là bắt buộc." });
 
             var normalizedSearch = search.Trim();
             var categories = await _context.TAGS

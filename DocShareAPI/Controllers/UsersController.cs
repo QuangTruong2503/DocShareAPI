@@ -1,4 +1,4 @@
-﻿using CloudinaryDotNet;
+using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
@@ -181,7 +181,7 @@ namespace DocShareAPI.Controllers
                     var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
                     return StatusCode(500, new
                     {
-                        message = "Lỗi khi lưu token vào database",
+                        message = "Lỗi khi lưu token vào cơ sở dữ liệu",
                         error = innerException,
                         success = false
                     });
@@ -542,7 +542,7 @@ namespace DocShareAPI.Controllers
                 return StatusCode(500, new
                 {
                     success = false,
-                    message = "Google Client ID chưa được cấu hình"
+                    message = "Google Client ID chưa được cấu hình."
                 });
             }
 
@@ -581,7 +581,7 @@ namespace DocShareAPI.Controllers
                 return Unauthorized(new
                 {
                     success = false,
-                    message = "Google token không đúng issuer"
+                    message = "Google token không đúng nhà phát hành."
                 });
             }
             if (payload.ExpirationTimeSeconds <
@@ -701,7 +701,7 @@ namespace DocShareAPI.Controllers
             {
                 return BadRequest(new
                 {
-                    message = "Email và password không được để trống",
+                    message = "Email và mật khẩu không được để trống",
                     success = false
                 });
             }
@@ -749,7 +749,7 @@ namespace DocShareAPI.Controllers
             }
 
             if (image == null || image.Length == 0)
-                return BadRequest("Không có ảnh được upload");
+                return BadRequest("Không có ảnh được tải lên");
 
             var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp", "image/jpg" };
             if (!allowedTypes.Contains(image.ContentType))
@@ -779,7 +779,7 @@ namespace DocShareAPI.Controllers
             var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
 
             if (uploadResult.Error != null)
-                return StatusCode(500, uploadResult.Error.Message);
+                return StatusCode(500, $"Không thể tải ảnh đại diện lên: {uploadResult.Error.Message}");
 
             if (!string.IsNullOrEmpty(user.avatar_public_id))
             {

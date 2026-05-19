@@ -65,17 +65,17 @@ namespace DocShareAPI.Controllers.Auth
         {
             var decodedToken = GetDecodedToken();
             if (decodedToken == null)
-                return Unauthorized(new { success = false, message = "Authentication required." });
+                return Unauthorized(new { success = false, message = "Bạn cần đăng nhập." });
 
             if (request.DocumentId <= 0)
-                return BadRequest(new { success = false, message = "DocumentId is required." });
+                return BadRequest(new { success = false, message = "ID tài liệu là bắt buộc." });
 
             if (string.IsNullOrWhiteSpace(request.Reason))
-                return BadRequest(new { success = false, message = "Reason is required." });
+                return BadRequest(new { success = false, message = "Lý do là bắt buộc." });
 
             var reason = request.Reason.Trim();
             if (reason.Length < 5 || reason.Length > 1000)
-                return BadRequest(new { success = false, message = "Reason must be between 5 and 1000 characters." });
+                return BadRequest(new { success = false, message = "Lý do phải có độ dài từ 5 đến 1000 ký tự." });
 
             var document = await _context.DOCUMENTS
                 .AsNoTracking()
@@ -91,7 +91,7 @@ namespace DocShareAPI.Controllers.Auth
                 .FirstOrDefaultAsync();
 
             if (document == null)
-                return NotFound(new { success = false, message = "Document not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy tài liệu." });
 
             var isOwner = document.user_id == decodedToken.userID;
             var isAdmin = string.Equals(decodedToken.roleID, "admin", StringComparison.OrdinalIgnoreCase);
@@ -101,7 +101,7 @@ namespace DocShareAPI.Controllers.Auth
                 return Forbid();
 
             if (isOwner)
-                return BadRequest(new { success = false, message = "You cannot report your own document." });
+                return BadRequest(new { success = false, message = "Bạn không thể báo cáo tài liệu của chính mình." });
 
             var activeStatuses = new[] { "Chờ giải quyết", "Đang xử lý" };
             var existingReport = await _context.REPORTS
@@ -125,7 +125,7 @@ namespace DocShareAPI.Controllers.Auth
                 return Conflict(new
                 {
                     success = false,
-                    message = "You already have an active report for this document.",
+                    message = "Bạn đã có báo cáo đang hoạt động cho tài liệu này.",
                     data = existingReport
                 });
             }
@@ -201,7 +201,7 @@ namespace DocShareAPI.Controllers.Auth
             return CreatedAtAction(nameof(GetMyReportDetail), new { reportId = report.report_id }, new
             {
                 success = true,
-                message = "Report created successfully.",
+                message = "Tạo báo cáo thành công.",
                 data = response
             });
         }
@@ -214,7 +214,7 @@ namespace DocShareAPI.Controllers.Auth
         {
             var decodedToken = GetDecodedToken();
             if (decodedToken == null)
-                return Unauthorized(new { success = false, message = "Authentication required." });
+                return Unauthorized(new { success = false, message = "Bạn cần đăng nhập." });
 
             var query = _context.REPORTS
                 .AsNoTracking()
@@ -254,7 +254,7 @@ namespace DocShareAPI.Controllers.Auth
         {
             var decodedToken = GetDecodedToken();
             if (decodedToken == null)
-                return Unauthorized(new { success = false, message = "Authentication required." });
+                return Unauthorized(new { success = false, message = "Bạn cần đăng nhập." });
 
             var report = await _context.REPORTS
                 .AsNoTracking()
@@ -297,7 +297,7 @@ namespace DocShareAPI.Controllers.Auth
                 .FirstOrDefaultAsync();
 
             if (report == null)
-                return NotFound(new { success = false, message = "Report not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy báo cáo." });
 
             return Ok(new { success = true, data = report });
         }

@@ -67,7 +67,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (document == null)
             {
-                return NotFound(new { message = "Document not found." });
+                return NotFound(new { message = "Không tìm thấy tài liệu." });
             }
 
             // 2️⃣ Nếu document private → kiểm tra quyền
@@ -75,7 +75,7 @@ namespace DocShareAPI.Controllers.Public
             {
                 if (decodedToken == null)
                 {
-                    return Unauthorized(new { message = "Login required to access this document." });
+                    return Unauthorized(new { message = "Bạn cần đăng nhập để truy cập tài liệu này." });
                 }
 
                 bool isOwner = decodedToken.userID == document.user_id;
@@ -97,7 +97,7 @@ namespace DocShareAPI.Controllers.Public
         {
             if (string.IsNullOrWhiteSpace(search))
             {
-                return BadRequest(new { message = "Search query is required." });
+                return BadRequest(new { message = "Từ khóa tìm kiếm là bắt buộc." });
             }
 
             var normalizedSearch = search.Trim().ToLower();
@@ -210,7 +210,7 @@ namespace DocShareAPI.Controllers.Public
             // Validate input
             if (documentIDs == null || !documentIDs.Any())
             {
-                return BadRequest(new { message = "No document IDs provided." });
+                return BadRequest(new { message = "Chưa cung cấp ID tài liệu nào." });
             }
 
             // Convert documentIDs to integers, handling invalid IDs
@@ -226,7 +226,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (!validDocumentIDs.Any())
             {
-                return BadRequest(new { message = "No valid document IDs provided." });
+                return BadRequest(new { message = "Không có ID tài liệu hợp lệ nào được cung cấp." });
             }
 
             // Fetch all matching documents in a single query

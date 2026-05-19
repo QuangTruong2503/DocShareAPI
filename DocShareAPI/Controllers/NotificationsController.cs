@@ -118,7 +118,7 @@ namespace DocShareAPI.Controllers
                     n.recipient_user_id == decodedToken.userID);
 
             if (notification == null)
-                return NotFound(new { success = false, message = "Notification not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy thông báo." });
 
             if (!notification.is_read)
             {
@@ -165,7 +165,7 @@ namespace DocShareAPI.Controllers
                     n.recipient_user_id == decodedToken.userID);
 
             if (notification == null)
-                return NotFound(new { success = false, message = "Notification not found." });
+                return NotFound(new { success = false, message = "Không tìm thấy thông báo." });
 
             _context.NOTIFICATIONS.Remove(notification);
             await _context.SaveChangesAsync();
