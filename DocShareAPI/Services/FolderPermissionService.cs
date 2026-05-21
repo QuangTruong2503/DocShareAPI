@@ -28,7 +28,7 @@ namespace DocShareAPI.Services
         {
             var folder = await _context.FOLDERS
                 .AsNoTracking()
-                .Where(f => f.folder_id == folderId)
+                .Where(f => f.folder_id == folderId && f.deleted_at == null)
                 .Select(f => new { f.owner_user_id, f.visibility })
                 .FirstOrDefaultAsync();
 

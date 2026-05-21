@@ -99,8 +99,9 @@ namespace DocShareAPI.Controllers
 
             var folders = await _context.FOLDERS
                 .AsNoTracking()
-                .Where(f => f.owner_user_id == decodedToken.userID ||
+                .Where(f => f.deleted_at == null && (f.owner_user_id == decodedToken.userID ||
                     (includeShared && f.FolderMembers.Any(m => m.user_id == decodedToken.userID)))
+                )
                 .OrderBy(f => f.name)
                 .ToListAsync();
 
@@ -150,7 +151,7 @@ namespace DocShareAPI.Controllers
 
             var query = _context.FOLDERS
                 .AsNoTracking()
-                .Where(f => f.owner_user_id == decodedToken.userID && f.parent_folder_id == parent_folder_id);
+                .Where(f => f.owner_user_id == decodedToken.userID && f.parent_folder_id == parent_folder_id && f.deleted_at == null);
 
             if (!string.IsNullOrWhiteSpace(search))
                 query = query.Where(f => f.name.Contains(search.Trim()));
@@ -183,7 +184,7 @@ namespace DocShareAPI.Controllers
 
             var query = _context.FOLDER_MEMBERS
                 .AsNoTracking()
-                .Where(m => m.user_id == decodedToken.userID && m.Folder != null && m.Folder.owner_user_id != decodedToken.userID);
+                .Where(m => m.user_id == decodedToken.userID && m.Folder != null && m.Folder.deleted_at == null && m.Folder.owner_user_id != decodedToken.userID);
 
             if (!string.IsNullOrWhiteSpace(search))
                 query = query.Where(m => m.Folder!.name.Contains(search.Trim()));
@@ -224,7 +225,7 @@ namespace DocShareAPI.Controllers
 
             var folder = await _context.FOLDERS
                 .AsNoTracking()
-                .Where(f => f.folder_id == folderId)
+                .Where(f => f.folder_id == folderId && f.deleted_at == null)
                 .Select(f => new
                 {
                     f.folder_id,
@@ -266,7 +267,7 @@ namespace DocShareAPI.Controllers
             if (!await _permissionService.CanEditFolderAsync(decodedToken.userID, folderId))
                 return Forbid();
 
-            var folder = await _context.FOLDERS.FirstOrDefaultAsync(f => f.folder_id == folderId);
+            var folder = await _context.FOLDERS.FirstOrDefaultAsync(f => f.folder_id == folderId && f.deleted_at == null);
             if (folder == null)
                 return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục." });
 
@@ -314,7 +315,12 @@ namespace DocShareAPI.Controllers
             if (folder == null)
                 return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục." });
 
-            _context.FOLDERS.Remove(folder);
+            folder.deleted_at = DateTime.UtcNow;
+            folder.deleted_by = decodedToken.userID;
+            folder.deleted_root_type = "folder";
+            folder.deleted_root_id = folder.folder_id;
+            folder.original_parent_folder_id = folder.parent_folder_id;
+            folder.updated_at = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
             return Ok(new { success = true, deleted_folder_id = folderId });
@@ -336,7 +342,7 @@ namespace DocShareAPI.Controllers
 
             var query = _context.FOLDER_DOCUMENTS
                 .AsNoTracking()
-                .Where(fd => fd.folder_id == folderId);
+                .Where(fd => fd.folder_id == folderId && fd.Document != null && fd.Document.deleted_at == null);
 
             if (!string.IsNullOrWhiteSpace(search))
                 query = query.Where(fd => fd.Document!.Title.Contains(search.Trim()));
@@ -389,11 +395,11 @@ namespace DocShareAPI.Controllers
             if (!await _permissionService.CanAddDocumentToFolderAsync(decodedToken.userID, folderId))
                 return Forbid();
 
-            var folder = await _context.FOLDERS.AsNoTracking().FirstOrDefaultAsync(f => f.folder_id == folderId);
+            var folder = await _context.FOLDERS.AsNoTracking().FirstOrDefaultAsync(f => f.folder_id == folderId && f.deleted_at == null);
             if (folder == null)
                 return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục." });
 
-            var document = await _context.DOCUMENTS.AsNoTracking().FirstOrDefaultAsync(d => d.document_id == dto.document_id);
+            var document = await _context.DOCUMENTS.AsNoTracking().FirstOrDefaultAsync(d => d.document_id == dto.document_id && d.deleted_at == null);
             if (document == null)
                 return NotFound(new { success = false, code = "DOCUMENT_NOT_FOUND", message = "Không tìm thấy tài liệu." });
             if (!CanAccessDocument(document.user_id, document.is_public, decodedToken))

@@ -13,6 +13,11 @@ namespace DocShareAPI.Models
         public string visibility { get; set; } = "private";
         public DateTime created_at { get; set; } = DateTime.UtcNow;
         public DateTime updated_at { get; set; } = DateTime.UtcNow;
+        public DateTime? deleted_at { get; set; }
+        public Guid? deleted_by { get; set; }
+        public string? deleted_root_type { get; set; }
+        public int? deleted_root_id { get; set; }
+        public int? original_parent_folder_id { get; set; }
 
         public Users? OwnerUser { get; set; }
         public Folders? ParentFolder { get; set; }

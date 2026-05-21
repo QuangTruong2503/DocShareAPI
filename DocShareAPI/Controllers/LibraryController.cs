@@ -56,16 +56,57 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpGet("trash")]
-        public IActionResult GetTrash([FromQuery] PaginationParams paginationParams)
+        public async Task<IActionResult> GetTrash([FromQuery] PaginationParams paginationParams, [FromQuery] string? sort = "deleted_desc")
         {
-            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse)
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
+
+            var trashedFolders = await _context.FOLDERS
+                .AsNoTracking()
+                .Include(f => f.OwnerUser)
+                .Include(f => f.ChildFolders)
+                .Include(f => f.FolderDocuments)
+                    .ThenInclude(fd => fd.Document)
+                .Where(f =>
+                    f.deleted_at != null &&
+                    f.deleted_root_type == "folder" &&
+                    f.deleted_root_id == f.folder_id &&
+                    f.owner_user_id == decodedToken.userID)
+                .ToListAsync();
+
+            var folderTrash = trashedFolders
+                .Select(f => ToTrashFolderItem(
+                    f,
+                    _context.DOCUMENTS.AsNoTracking().Count(d => d.deleted_root_type == "folder" && d.deleted_root_id == f.folder_id),
+                    _context.FOLDERS.AsNoTracking().Count(child => child.deleted_root_type == "folder" && child.deleted_root_id == f.folder_id && child.folder_id != f.folder_id),
+                    _context.DOCUMENTS.AsNoTracking().Where(d => d.deleted_root_type == "folder" && d.deleted_root_id == f.folder_id).Sum(d => (long)d.file_size)))
+                .Cast<object>()
+                .ToList();
+
+            var trashedDocuments = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Include(d => d.Users)
+                .Where(d =>
+                    d.deleted_at != null &&
+                    d.deleted_root_type == "document" &&
+                    d.deleted_root_id == d.document_id &&
+                    (d.user_id == decodedToken.userID || decodedToken.roleID == "admin"))
+                .ToListAsync();
+
+            var documentTrash = trashedDocuments
+                .Select(d => ToTrashDocumentItem(d, d.original_parent_folder_id))
+                .Cast<object>()
+                .ToList();
+
+            var items = SortTrashItems(folderTrash.Concat(documentTrash), sort).ToList();
+            var pagedItems = PageItems(items, paginationParams);
 
             return Ok(new
             {
-                items = Array.Empty<object>(),
-                pagination = Pagination(1, paginationParams.PageSize, 0),
-                message = "Trash is not enabled in the current database schema."
+                folder = TrashFolderContext(),
+                items = pagedItems.items,
+                pagination = Pagination(pagedItems.currentPage, pagedItems.pageSize, items.Count),
+                counts = new { trash = items.Count }
             });
         }
 
@@ -114,7 +155,7 @@ namespace DocShareAPI.Controllers
 
             var memberFolders = await _context.FOLDER_MEMBERS
                 .AsNoTracking()
-                .Where(m => m.user_id == decodedToken.userID && m.Folder != null && m.Folder.owner_user_id != decodedToken.userID)
+                .Where(m => m.user_id == decodedToken.userID && m.Folder != null && m.Folder.deleted_at == null && m.Folder.owner_user_id != decodedToken.userID)
                 .Select(m => new { Folder = m.Folder!, m.role })
                 .ToListAsync();
 
@@ -204,7 +245,7 @@ namespace DocShareAPI.Controllers
 
             var usedBytes = await _context.DOCUMENTS
                 .AsNoTracking()
-                .Where(d => d.user_id == userId)
+                .Where(d => d.user_id == userId && d.deleted_at == null)
                 .SumAsync(d => (long)d.file_size);
 
             return Ok(new
@@ -250,7 +291,7 @@ namespace DocShareAPI.Controllers
                 .Include(f => f.FolderDocuments)
                     .ThenInclude(fd => fd.Document)
                 .Include(f => f.FolderMembers)
-                .Where(f => f.owner_user_id == userId || f.FolderMembers.Any(m => m.user_id == userId));
+                .Where(f => f.deleted_at == null && (f.owner_user_id == userId || f.FolderMembers.Any(m => m.user_id == userId)));
 
             if (!includeNestedFolders)
                 foldersQuery = foldersQuery.Where(f => f.parent_folder_id == parentFolderId);
@@ -279,6 +320,7 @@ namespace DocShareAPI.Controllers
             var documentsQuery = _context.DOCUMENTS
                 .AsNoTracking()
                 .Include(d => d.Users)
+                .Where(d => d.deleted_at == null)
                 .AsQueryable();
 
             if (includeNestedDocuments)
@@ -288,11 +330,11 @@ namespace DocShareAPI.Controllers
             }
             else if (parentFolderId.HasValue)
             {
-                documentsQuery = documentsQuery.Where(d => _context.FOLDER_DOCUMENTS.Any(fd => fd.document_id == d.document_id && fd.folder_id == parentFolderId.Value));
+                documentsQuery = documentsQuery.Where(d => _context.FOLDER_DOCUMENTS.Any(fd => fd.document_id == d.document_id && fd.folder_id == parentFolderId.Value && fd.Folder != null && fd.Folder.deleted_at == null));
             }
             else
             {
-                documentsQuery = documentsQuery.Where(d => d.user_id == userId && !_context.FOLDER_DOCUMENTS.Any(fd => fd.document_id == d.document_id));
+                documentsQuery = documentsQuery.Where(d => d.user_id == userId && !_context.FOLDER_DOCUMENTS.Any(fd => fd.document_id == d.document_id && fd.Folder != null && fd.Folder.deleted_at == null));
             }
 
             if (!string.IsNullOrWhiteSpace(normalizedSearch))
@@ -388,6 +430,80 @@ namespace DocShareAPI.Controllers
                 permissions = ItemPermissions(permission),
                 createdAt = document.uploaded_at,
                 updatedAt = document.uploaded_at
+            };
+        }
+
+        internal static object ToTrashFolderItem(Folders folder, int? documentCountOverride = null, int? folderCountOverride = null, long? totalSizeOverride = null)
+        {
+            var documentCount = documentCountOverride ?? folder.FolderDocuments?.Count(fd => fd.Document?.deleted_at != null) ?? 0;
+            var folderCount = folderCountOverride ?? folder.ChildFolders?.Count(f => f.deleted_at != null) ?? 0;
+            return new
+            {
+                id = folder.folder_id,
+                type = "folder",
+                name = folder.name,
+                parentFolderId = folder.original_parent_folder_id,
+                ownerId = folder.owner_user_id,
+                ownerName = folder.OwnerUser?.full_name ?? folder.OwnerUser?.Username,
+                documentCount,
+                folderCount,
+                childrenCount = documentCount + folderCount,
+                totalSize = totalSizeOverride ?? folder.FolderDocuments?.Where(fd => fd.Document?.deleted_at != null).Sum(fd => (long)fd.Document!.file_size) ?? 0,
+                trashedAt = folder.deleted_at,
+                permissions = TrashItemPermissions()
+            };
+        }
+
+        internal static object ToTrashDocumentItem(Documents document, int? parentFolderId)
+        {
+            var extension = GetExtension(document);
+            return new
+            {
+                id = document.document_id,
+                type = "document",
+                name = document.Title,
+                title = document.Title,
+                parentFolderId,
+                ownerId = document.user_id,
+                ownerName = document.Users?.full_name ?? document.Users?.Username,
+                mimeType = ToMimeType(document.file_type, extension),
+                extension,
+                size = document.file_size,
+                trashedAt = document.deleted_at,
+                permissions = TrashItemPermissions()
+            };
+        }
+
+        private static object TrashFolderContext()
+        {
+            return new
+            {
+                id = (int?)null,
+                name = "Thùng rác",
+                parentFolderId = (int?)null,
+                breadcrumb = new[]
+                {
+                    new { id = (int?)null, name = "Thư viện", href = "/library" },
+                    new { id = (int?)null, name = "Thùng rác", href = "/library?area=trash" }
+                },
+                permissions = new { canView = true, canDelete = true }
+            };
+        }
+
+        private static object TrashItemPermissions()
+        {
+            return new
+            {
+                canView = true,
+                canDownload = false,
+                canUpload = false,
+                canCreateFolder = false,
+                canRename = false,
+                canMove = false,
+                canCopy = false,
+                canShare = false,
+                canDelete = true,
+                canManageMembers = false
             };
         }
 
@@ -516,6 +632,17 @@ namespace DocShareAPI.Controllers
             };
         }
 
+        private static IEnumerable<object> SortTrashItems(IEnumerable<object> items, string? sort)
+        {
+            return (sort ?? "deleted_desc").ToLowerInvariant() switch
+            {
+                "deleted_asc" => items.OrderBy(GetItemTrashedAt),
+                "name_asc" => items.OrderBy(GetItemName),
+                "name_desc" => items.OrderByDescending(GetItemName),
+                _ => items.OrderByDescending(GetItemTrashedAt)
+            };
+        }
+
         private static string GetItemType(object item) => item.GetType().GetProperty("type")?.GetValue(item)?.ToString() ?? "";
         private static string GetItemName(object item) => item.GetType().GetProperty("name")?.GetValue(item)?.ToString() ?? "";
         private static long GetItemSize(object item)
@@ -531,6 +658,7 @@ namespace DocShareAPI.Controllers
             };
         }
         private static DateTime GetItemUpdatedAt(object item) => item.GetType().GetProperty("updatedAt")?.GetValue(item) as DateTime? ?? DateTime.MinValue;
+        private static DateTime GetItemTrashedAt(object item) => item.GetType().GetProperty("trashedAt")?.GetValue(item) as DateTime? ?? DateTime.MinValue;
         private static bool IsShared(object item) => item.GetType().GetProperty("isShared")?.GetValue(item) as bool? ?? false;
 
         private static string GetExtension(Documents document)

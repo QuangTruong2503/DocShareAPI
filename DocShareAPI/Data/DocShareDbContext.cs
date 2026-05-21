@@ -76,6 +76,12 @@ namespace DocShareAPI.Data
                 .HasIndex(d => new { d.is_public, d.uploaded_at });
             modelBuilder.Entity<Documents>()
                 .HasIndex(d => d.user_id);
+            modelBuilder.Entity<Documents>()
+                .HasIndex(d => d.deleted_at);
+            modelBuilder.Entity<Documents>()
+                .HasIndex(d => new { d.deleted_root_type, d.deleted_root_id });
+            modelBuilder.Entity<Documents>()
+                .HasIndex(d => new { d.user_id, d.deleted_at });
             modelBuilder.Entity<Tokens>()
                 .HasIndex(t => t.token)
                 .IsUnique();
@@ -151,6 +157,12 @@ namespace DocShareAPI.Data
                 .HasIndex(f => new { f.owner_user_id, f.parent_folder_id, f.name })
                 .HasDatabaseName("UQ_FOLDERS_owner_parent_name")
                 .IsUnique();
+            modelBuilder.Entity<Folders>()
+                .HasIndex(f => f.deleted_at);
+            modelBuilder.Entity<Folders>()
+                .HasIndex(f => new { f.deleted_root_type, f.deleted_root_id });
+            modelBuilder.Entity<Folders>()
+                .HasIndex(f => new { f.owner_user_id, f.deleted_at });
             modelBuilder.Entity<Folders>()
                 .HasOne(f => f.OwnerUser)
                 .WithMany()

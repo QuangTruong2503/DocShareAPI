@@ -114,19 +114,19 @@ namespace DocShareAPI.Controllers
         private async Task<bool> CanShare(DecodedTokenResponse decodedToken, int itemId, string itemType)
         {
             if (itemType == "document")
-                return await _context.DOCUMENTS.AnyAsync(d => d.document_id == itemId && (d.user_id == decodedToken.userID || decodedToken.roleID == "admin"));
-            return await _context.FOLDERS.AnyAsync(f => f.folder_id == itemId && f.owner_user_id == decodedToken.userID);
+                return await _context.DOCUMENTS.AnyAsync(d => d.document_id == itemId && d.deleted_at == null && (d.user_id == decodedToken.userID || decodedToken.roleID == "admin"));
+            return await _context.FOLDERS.AnyAsync(f => f.folder_id == itemId && f.deleted_at == null && f.owner_user_id == decodedToken.userID);
         }
 
         private async Task<object?> BuildShareItem(ShareLinkState link)
         {
             if (link.ItemType == "document")
             {
-                var document = await _context.DOCUMENTS.AsNoTracking().Include(d => d.Users).FirstOrDefaultAsync(d => d.document_id == link.ItemId);
+                var document = await _context.DOCUMENTS.AsNoTracking().Include(d => d.Users).FirstOrDefaultAsync(d => d.document_id == link.ItemId && d.deleted_at == null);
                 return document == null ? null : LibraryController.ToDocumentItem(document, null, link.Permission);
             }
 
-            var folder = await _context.FOLDERS.AsNoTracking().Include(f => f.OwnerUser).FirstOrDefaultAsync(f => f.folder_id == link.ItemId);
+            var folder = await _context.FOLDERS.AsNoTracking().Include(f => f.OwnerUser).FirstOrDefaultAsync(f => f.folder_id == link.ItemId && f.deleted_at == null);
             return folder == null ? null : LibraryController.ToFolderItem(folder, link.Permission, isShared: true);
         }
 
