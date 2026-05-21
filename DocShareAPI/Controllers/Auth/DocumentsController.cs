@@ -372,7 +372,7 @@ namespace DocShareAPI.Controllers.Auth
                         message: $"Tài liệu \"{newDoc.Title}\" đã được tải lên thư mục \"{folder.name}\".",
                         relatedDocumentId: newDoc.document_id,
                         relatedFolderId: folder.folder_id,
-                        targetUrl: $"/library/folders/{folder.folder_id}/documents",
+                        targetUrl: $"/documents/folders/{folder.folder_id}",
                         metadata: new { folder_id = folder.folder_id, document_id = newDoc.document_id });
 
                     if (folder.owner_user_id != decodedToken.userID)
@@ -385,7 +385,7 @@ namespace DocShareAPI.Controllers.Auth
                             message: $"Tài liệu \"{newDoc.Title}\" đã được thêm vào thư mục \"{folder.name}\".",
                             relatedDocumentId: newDoc.document_id,
                             relatedFolderId: folder.folder_id,
-                            targetUrl: $"/library/folders/{folder.folder_id}/documents",
+                            targetUrl: $"/documents/folders/{folder.folder_id}",
                             metadata: new { folder_id = folder.folder_id, document_id = newDoc.document_id });
                     }
 
@@ -429,6 +429,176 @@ namespace DocShareAPI.Controllers.Auth
             {
                 pdfStream?.Dispose();
             }
+        }
+
+        [HttpPost("/api/documents/upload")]
+        public async Task<ActionResult> UploadDocuments(List<IFormFile> files, [FromForm] int? parentFolderId = null)
+        {
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
+                return Unauthorized(new { success = false, code = "UNAUTHORIZED", message = "Chưa đăng nhập hoặc token không hợp lệ." });
+
+            if (files == null || files.Count == 0)
+                return BadRequest(new { success = false, code = "VALIDATION_ERROR", message = "Vui lòng chọn ít nhất một tài liệu." });
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
+            if (user == null)
+                return NotFound(new { success = false, code = "USER_NOT_FOUND", message = "Không tìm thấy người dùng." });
+            if (!user.is_verified)
+                return Forbid("Tải lên thất bại! Vui lòng xác thực tài khoản trong phần cài đặt.");
+
+            Folders? parentFolder = null;
+            if (parentFolderId.HasValue)
+            {
+                parentFolder = await _context.FOLDERS.AsNoTracking().FirstOrDefaultAsync(f => f.folder_id == parentFolderId.Value);
+                if (parentFolder == null)
+                    return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục." });
+                if (!await _folderPermissionService.CanAddDocumentToFolderAsync(decodedToken.userID, parentFolderId.Value))
+                    return Forbid();
+            }
+
+            var uploadedDocuments = new List<object>();
+            var failed = new List<object>();
+
+            foreach (var file in files.Where(f => f != null))
+            {
+                if (!IsValidDocument(file, out var validationMessage))
+                {
+                    failed.Add(new { fileName = file.FileName, code = "UNSUPPORTED_FILE_TYPE", message = validationMessage });
+                    continue;
+                }
+
+                IFormFile fileToUpload = file;
+                MemoryStream? pdfStream = null;
+                ImageUploadResult? uploadResult = null;
+
+                try
+                {
+                    if (Path.GetExtension(file.FileName).ToLowerInvariant() == ".docx")
+                    {
+                        using var inputStream = file.OpenReadStream();
+                        var doc = new Aspose.Words.Document(inputStream);
+                        pdfStream = new MemoryStream();
+                        doc.Save(pdfStream, Aspose.Words.SaveFormat.Pdf);
+                        pdfStream.Position = 0;
+                        fileToUpload = new FormFile(pdfStream, 0, pdfStream.Length, file.Name, Path.ChangeExtension(file.FileName, ".pdf"))
+                        {
+                            Headers = file.Headers,
+                            ContentType = "application/pdf"
+                        };
+                    }
+
+                    uploadResult = await UploadToCloudinary(fileToUpload);
+                    if (uploadResult == null || uploadResult.Error != null)
+                    {
+                        failed.Add(new { fileName = file.FileName, code = "INTERNAL_ERROR", message = uploadResult?.Error?.Message ?? "Cloudinary upload failed." });
+                        continue;
+                    }
+
+                    Documents? newDoc = null;
+                    var strategy = _context.Database.CreateExecutionStrategy();
+                    await strategy.ExecuteAsync(async () =>
+                    {
+                        await using var transaction = await _context.Database.BeginTransactionAsync();
+                        newDoc = await CreateDocumentRecord(fileToUpload, decodedToken.userID, uploadResult);
+
+                        if (parentFolderId.HasValue)
+                        {
+                            _context.FOLDER_DOCUMENTS.Add(new FolderDocuments
+                            {
+                                folder_id = parentFolderId.Value,
+                                document_id = newDoc.document_id,
+                                added_by_user_id = decodedToken.userID,
+                                added_at = DateTime.UtcNow
+                            });
+                            await _context.SaveChangesAsync();
+                        }
+
+                        await transaction.CommitAsync();
+                    });
+
+                    uploadedDocuments.Add(ToWorkspaceDocument(newDoc!, parentFolderId));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"Batch upload failed for {file.FileName}: {ex.Message}");
+                    if (uploadResult?.PublicId != null)
+                        await DeleteFromCloudinary(uploadResult.PublicId);
+                    failed.Add(new { fileName = file.FileName, code = "INTERNAL_ERROR", message = "Không thể tải tài liệu này." });
+                }
+                finally
+                {
+                    pdfStream?.Dispose();
+                }
+            }
+
+            return Ok(new
+            {
+                success = failed.Count == 0,
+                documents = uploadedDocuments,
+                failed
+            });
+        }
+
+        [HttpGet("/api/documents/{documentId:int}/status")]
+        public async Task<ActionResult> GetDocumentStatus(int documentId)
+        {
+            var document = await _context.DOCUMENTS.AsNoTracking().FirstOrDefaultAsync(d => d.document_id == documentId);
+            if (document == null)
+                return NotFound(new { success = false, code = "DOCUMENT_NOT_FOUND", message = "Không tìm thấy tài liệu." });
+
+            return Ok(new
+            {
+                id = document.document_id,
+                status = "ready",
+                thumbnailUrl = document.thumbnail_url,
+                previewUrl = $"/api/documents/{document.document_id}/preview",
+                errorMessage = (string?)null
+            });
+        }
+
+        [HttpGet("/api/documents/{documentId:int}/preview")]
+        public async Task<ActionResult> GetDocumentPreview(int documentId)
+        {
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+                return Unauthorized(new { success = false, code = "UNAUTHORIZED", message = "Chưa đăng nhập hoặc token không hợp lệ." });
+
+            var document = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Include(d => d.Users)
+                .FirstOrDefaultAsync(d => d.document_id == documentId);
+
+            if (document == null)
+                return NotFound(new { success = false, code = "DOCUMENT_NOT_FOUND", message = "Không tìm thấy tài liệu." });
+            if (!await CanAccessDocumentAsync(document, decodedToken))
+                return Forbid();
+
+            var parentFolderId = await _context.FOLDER_DOCUMENTS
+                .AsNoTracking()
+                .Where(fd => fd.document_id == documentId)
+                .Select(fd => (int?)fd.folder_id)
+                .FirstOrDefaultAsync();
+
+            return Ok(new
+            {
+                document = ToWorkspaceDocument(document, parentFolderId),
+                metadata = new
+                {
+                    ownerName = document.Users?.full_name ?? document.Users?.Username,
+                    createdAt = document.uploaded_at,
+                    updatedAt = document.uploaded_at,
+                    views = 0,
+                    downloads = document.download_count
+                },
+                versions = Array.Empty<object>(),
+                comments = Array.Empty<object>()
+            });
+        }
+
+        [HttpGet("/api/documents/{documentId:int}/download")]
+        public async Task<ActionResult> DownloadDocumentByRoute(int documentId)
+        {
+            return await DownloadDocument(documentId);
         }
 
         //Cập nhật tài liệu với document_id
@@ -834,11 +1004,7 @@ namespace DocShareAPI.Controllers.Auth
                     return NotFound($"Không tìm thấy tài liệu có ID: {documentID}");
                 }
 
-                bool canDownload = document.is_public ||
-                    document.user_id == decodedTokenResponse.userID ||
-                    decodedTokenResponse.roleID == "admin";
-
-                if (!canDownload)
+                if (!await CanAccessDocumentAsync(document, decodedTokenResponse))
                 {
                     return Forbid();
                 }
@@ -1021,6 +1187,89 @@ namespace DocShareAPI.Controllers.Auth
             await _context.COLLECTION_DOCUMENTS.Where(cd => ids.Contains(cd.document_id)).ExecuteDeleteAsync();
             await _context.LIKES.Where(l => ids.Contains(l.document_id)).ExecuteDeleteAsync();
             await _context.REPORTS.Where(r => ids.Contains(r.document_id)).ExecuteDeleteAsync();
+        }
+
+        private async Task<bool> CanAccessDocumentAsync(Documents document, DecodedTokenResponse decodedToken)
+        {
+            if (document.is_public ||
+                document.user_id == decodedToken.userID ||
+                string.Equals(decodedToken.roleID, "admin", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var folderId = await _context.FOLDER_DOCUMENTS
+                .AsNoTracking()
+                .Where(fd => fd.document_id == document.document_id)
+                .Select(fd => (int?)fd.folder_id)
+                .FirstOrDefaultAsync();
+
+            return folderId.HasValue &&
+                await _folderPermissionService.CanViewFolderAsync(decodedToken.userID, folderId.Value);
+        }
+
+        private static object ToWorkspaceDocument(Documents document, int? parentFolderId)
+        {
+            var extension = GetDocumentExtension(document);
+            return new
+            {
+                id = document.document_id,
+                type = "document",
+                name = document.Title,
+                title = document.Title,
+                description = document.Description,
+                parentFolderId,
+                ownerId = document.user_id,
+                ownerName = document.Users?.full_name ?? document.Users?.Username,
+                mimeType = ToMimeType(document.file_type, extension),
+                extension,
+                size = document.file_size,
+                thumbnailUrl = document.thumbnail_url,
+                previewUrl = $"/api/documents/{document.document_id}/preview",
+                downloadUrl = $"/api/documents/{document.document_id}/download",
+                status = "ready",
+                isFavorite = false,
+                isShared = document.is_public,
+                allowDownload = true,
+                permission = "owner",
+                permissions = new
+                {
+                    canView = true,
+                    canDownload = true,
+                    canUpload = true,
+                    canCreateFolder = true,
+                    canRename = true,
+                    canMove = true,
+                    canCopy = true,
+                    canShare = true,
+                    canDelete = true,
+                    canManageMembers = false
+                },
+                createdAt = document.uploaded_at,
+                updatedAt = document.uploaded_at
+            };
+        }
+
+        private static string GetDocumentExtension(Documents document)
+        {
+            var titleExtension = Path.GetExtension(document.Title)?.TrimStart('.').ToLowerInvariant();
+            return string.IsNullOrWhiteSpace(titleExtension)
+                ? document.file_type?.TrimStart('.').ToLowerInvariant() ?? ""
+                : titleExtension;
+        }
+
+        private static string ToMimeType(string? fileType, string extension)
+        {
+            var normalized = (fileType ?? extension).ToLowerInvariant();
+            return normalized switch
+            {
+                "pdf" => "application/pdf",
+                "doc" => "application/msword",
+                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "txt" => "text/plain",
+                _ when normalized.Contains("/") => normalized,
+                _ => "application/octet-stream"
+            };
         }
         //Loại bỏ dấu tiếng việt
         public static string RemoveDiacritics(string text)

@@ -38,23 +38,35 @@ namespace DocShareAPI.Controllers
                 return Unauthorized();
 
             var name = dto.name?.Trim();
+            var parentFolderId = dto.parentFolderId ?? dto.parent_folder_id;
             var visibility = NormalizeVisibility(dto.visibility);
+            Folders? parentFolder = null;
 
             if (string.IsNullOrWhiteSpace(name))
                 return BadRequest(new { success = false, code = "VALIDATION_ERROR", message = "Tên thư mục là bắt buộc." });
             if (visibility == null)
                 return UnprocessableEntity(new { success = false, code = "VALIDATION_ERROR", message = "visibility không hợp lệ." });
 
-            if (dto.parent_folder_id.HasValue && !await _permissionService.CanAddDocumentToFolderAsync(decodedToken.userID, dto.parent_folder_id.Value))
-                return Forbid();
+            if (parentFolderId.HasValue)
+            {
+                if (!await _permissionService.CanViewFolderAsync(decodedToken.userID, parentFolderId.Value))
+                    return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục cha." });
 
-            if (await FolderNameExists(decodedToken.userID, dto.parent_folder_id, name, null))
+                if (!await _permissionService.CanAddDocumentToFolderAsync(decodedToken.userID, parentFolderId.Value))
+                    return Forbid();
+
+                parentFolder = await _context.FOLDERS.FirstOrDefaultAsync(f => f.folder_id == parentFolderId.Value);
+                if (parentFolder == null)
+                    return NotFound(new { success = false, code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục cha." });
+            }
+
+            if (await FolderNameExistsInParent(decodedToken.userID, parentFolderId, name, null))
                 return Conflict(new { success = false, code = "FOLDER_NAME_EXISTS", message = "Tên thư mục đã tồn tại trong cùng cấp." });
 
             var folder = new Folders
             {
                 owner_user_id = decodedToken.userID,
-                parent_folder_id = dto.parent_folder_id,
+                parent_folder_id = parentFolderId,
                 name = name,
                 description = dto.description,
                 visibility = visibility,
@@ -63,9 +75,68 @@ namespace DocShareAPI.Controllers
             };
 
             _context.FOLDERS.Add(folder);
+            if (parentFolder != null)
+                parentFolder.updated_at = DateTime.UtcNow;
+
             await _context.SaveChangesAsync();
 
-            return Ok(new { success = true, folder = ToFolderResponse(folder, "owner") });
+            return Ok(new { success = true, folder = ToWorkspaceFolderResponse(folder, "owner") });
+        }
+
+        [HttpPost("{parentFolderId:int}/folders")]
+        public async Task<IActionResult> CreateChildFolder(int parentFolderId, [FromBody] CreateFolderDto dto)
+        {
+            dto.parentFolderId = parentFolderId;
+            dto.parent_folder_id = parentFolderId;
+            return await CreateFolder(dto);
+        }
+
+        [HttpGet("tree")]
+        public async Task<IActionResult> GetFolderTree([FromQuery] string? root = "my", [FromQuery] bool includeShared = true)
+        {
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
+                return Unauthorized();
+
+            var folders = await _context.FOLDERS
+                .AsNoTracking()
+                .Where(f => f.owner_user_id == decodedToken.userID ||
+                    (includeShared && f.FolderMembers.Any(m => m.user_id == decodedToken.userID)))
+                .OrderBy(f => f.name)
+                .ToListAsync();
+
+            var memberRoles = await _context.FOLDER_MEMBERS
+                .AsNoTracking()
+                .Where(m => m.user_id == decodedToken.userID)
+                .ToDictionaryAsync(m => m.folder_id, m => m.role);
+
+            object ToNode(Folders folder)
+            {
+                var role = folder.owner_user_id == decodedToken.userID
+                    ? "owner"
+                    : NormalizeWorkspaceRole(memberRoles.TryGetValue(folder.folder_id, out var memberRole) ? memberRole : null);
+
+                var children = folders
+                    .Where(f => f.parent_folder_id == folder.folder_id)
+                    .Select(ToNode)
+                    .ToList();
+
+                return new
+                {
+                    id = folder.folder_id,
+                    name = folder.name,
+                    parentFolderId = folder.parent_folder_id,
+                    permission = role,
+                    canReceiveItems = role is "owner" or "editor",
+                    children
+                };
+            }
+
+            var nodes = folders
+                .Where(f => f.parent_folder_id == null)
+                .Select(ToNode)
+                .ToList();
+
+            return Ok(new { nodes });
         }
 
         [HttpGet("my")]
@@ -364,7 +435,7 @@ namespace DocShareAPI.Controllers
                         message: $"Tài liệu \"{document.Title}\" đã được thêm vào thư mục \"{folder.name}\".",
                         relatedDocumentId: document.document_id,
                         relatedFolderId: folder.folder_id,
-                        targetUrl: $"/library/folders/{folder.folder_id}/documents",
+                        targetUrl: $"/documents/folders/{folder.folder_id}",
                         metadata: new { folder_id = folder.folder_id, document_id = document.document_id });
                 }
 
@@ -515,7 +586,7 @@ namespace DocShareAPI.Controllers
                 title: "Bạn đã được thêm vào thư mục",
                 message: $"Bạn đã được thêm vào thư mục \"{folder.name}\" với quyền {role}.",
                 relatedFolderId: folderId,
-                targetUrl: $"/library/folders/{folderId}",
+                targetUrl: $"/documents/folders/{folderId}",
                 metadata: new { folder_id = folderId, role });
 
             return Ok(new { success = true, member });
@@ -551,7 +622,7 @@ namespace DocShareAPI.Controllers
                 title: "Quyền trong thư mục đã thay đổi",
                 message: $"Quyền của bạn trong thư mục đã được đổi thành {role}.",
                 relatedFolderId: folderId,
-                targetUrl: $"/library/folders/{folderId}",
+                targetUrl: $"/documents/folders/{folderId}",
                 metadata: new { folder_id = folderId, role });
 
             return Ok(new { success = true, member });
@@ -580,7 +651,7 @@ namespace DocShareAPI.Controllers
                 title: "Bạn đã bị xóa khỏi thư mục",
                 message: "Bạn không còn là thành viên của thư mục này.",
                 relatedFolderId: folderId,
-                targetUrl: "/library?tab=shared",
+                targetUrl: "/documents/shared-with-me",
                 metadata: new { folder_id = folderId });
 
             return Ok(new { success = true, folder_id = folderId, removed_user_id = memberUserId });
@@ -872,7 +943,7 @@ namespace DocShareAPI.Controllers
                     title: accept ? "Lời mời thư mục đã được chấp nhận" : "Lời mời thư mục đã bị từ chối",
                     message: accept ? "Một người dùng đã chấp nhận lời mời vào thư mục." : "Một người dùng đã từ chối lời mời vào thư mục.",
                     relatedFolderId: invite.folder_id,
-                    targetUrl: accept ? $"/library/folders/{invite.folder_id}" : $"/library/folders/{invite.folder_id}/invites",
+                    targetUrl: accept ? $"/documents/folders/{invite.folder_id}" : $"/documents/folders/{invite.folder_id}/invites",
                     metadata: new { folder_id = invite.folder_id, invite_id = invite.invite_id });
 
                 await transaction.CommitAsync();
@@ -887,6 +958,15 @@ namespace DocShareAPI.Controllers
                 f.owner_user_id == ownerUserId &&
                 f.parent_folder_id == parentFolderId &&
                 f.name == name &&
+                (!exceptFolderId.HasValue || f.folder_id != exceptFolderId.Value));
+        }
+
+        private async Task<bool> FolderNameExistsInParent(Guid ownerUserId, int? parentFolderId, string name, int? exceptFolderId)
+        {
+            return await _context.FOLDERS.AnyAsync(f =>
+                f.parent_folder_id == parentFolderId &&
+                f.name == name &&
+                (parentFolderId.HasValue || f.owner_user_id == ownerUserId) &&
                 (!exceptFolderId.HasValue || f.folder_id != exceptFolderId.Value));
         }
 
@@ -931,6 +1011,31 @@ namespace DocShareAPI.Controllers
             };
         }
 
+        private static object ToWorkspaceFolderResponse(Folders folder, string? role)
+        {
+            var permission = NormalizeWorkspaceRole(role);
+            return new
+            {
+                id = folder.folder_id,
+                type = "folder",
+                name = folder.name,
+                parentFolderId = folder.parent_folder_id,
+                ownerId = folder.owner_user_id,
+                folder.description,
+                color = (string?)null,
+                childrenCount = 0,
+                documentCount = 0,
+                folderCount = 0,
+                totalSize = 0,
+                isFavorite = false,
+                isShared = folder.visibility != "private",
+                permission,
+                permissions = WorkspacePermissions(permission),
+                createdAt = folder.created_at,
+                updatedAt = folder.updated_at
+            };
+        }
+
         private static object ToInviteResponse(FolderInvites invite)
         {
             return new
@@ -959,6 +1064,40 @@ namespace DocShareAPI.Controllers
                 can_edit_folder = role is "owner" or "admin" or "editor",
                 can_manage_members = role is "owner" or "admin",
                 can_delete_folder = role == "owner"
+            };
+        }
+
+        private static string NormalizeWorkspaceRole(string? role)
+        {
+            return role switch
+            {
+                "owner" => "owner",
+                "admin" => "owner",
+                "editor" => "editor",
+                "contributor" => "editor",
+                "commenter" => "viewer",
+                "public" => "viewer",
+                "viewer" => "viewer",
+                _ => "viewer"
+            };
+        }
+
+        private static object WorkspacePermissions(string? role)
+        {
+            var permission = NormalizeWorkspaceRole(role);
+            var canEdit = permission is "owner" or "editor";
+            return new
+            {
+                canView = true,
+                canDownload = true,
+                canUpload = canEdit,
+                canCreateFolder = canEdit,
+                canRename = canEdit,
+                canMove = canEdit,
+                canCopy = canEdit,
+                canShare = canEdit,
+                canDelete = canEdit,
+                canManageMembers = permission == "owner"
             };
         }
 

@@ -9,6 +9,8 @@ namespace DocShareAPI.DataTransferObject.Folders
         public required string name { get; set; }
         public string? description { get; set; }
         public int? parent_folder_id { get; set; }
+        public int? parentFolderId { get; set; }
+        public string? color { get; set; }
         public string? visibility { get; set; }
     }
 
