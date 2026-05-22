@@ -52,7 +52,7 @@ namespace DocShareAPI.Controllers
         {
             if (string.IsNullOrEmpty(email))
             {
-                return BadRequest(new { message = "Email is required." });
+                return BadRequest(new { message = "Email là bắt buộc." });
             }
 
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == email);
@@ -111,7 +111,7 @@ namespace DocShareAPI.Controllers
                 // Có thể rollback token nếu gửi email thất bại
                 _context.TOKENS.Remove(tokenRecord);
                 await _context.SaveChangesAsync();
-                return StatusCode(500, new { message = "Error sending verification email", error = ex.Message });
+                return StatusCode(500, new { message = "Không thể gửi email xác thực.", error = ex.Message });
             }
         }
 
@@ -556,7 +556,7 @@ namespace DocShareAPI.Controllers
 
             if (user == null)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             user.password_hash = PasswordHasher.HashPassword(request.newPassword);

@@ -20,6 +20,11 @@ namespace DocShareAPI.Models
         public int file_size { get; set; }
         public required int pages {  get; set; }
         public bool is_public { get; set; }
+        public DateTime? deleted_at { get; set; }
+        public Guid? deleted_by { get; set; }
+        public string? deleted_root_type { get; set; }
+        public int? deleted_root_id { get; set; }
+        public int? original_parent_folder_id { get; set; }
 
         public Users? Users { get; set; }
         public ICollection<DocumentCategories> DocumentCategories { get; set; }

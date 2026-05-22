@@ -47,7 +47,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (follow == null)
             {
-                return NotFound(new { message = "Follow relationship not found." });
+                return NotFound(new { message = "Không tìm thấy quan hệ theo dõi." });
             }
 
             return Ok(follow);
@@ -65,7 +65,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (!userExists)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
@@ -130,7 +130,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (!userExists)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
@@ -192,7 +192,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (!targetUserExists)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;

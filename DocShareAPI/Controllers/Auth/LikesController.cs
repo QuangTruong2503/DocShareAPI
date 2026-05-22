@@ -1,4 +1,4 @@
-﻿using Aspose.Pdf.Drawing;
+using Aspose.Pdf.Drawing;
 using DocShareAPI.Data;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
@@ -28,7 +28,7 @@ namespace DocShareAPI.Controllers.Auth
         public async Task<IActionResult> SetReaction(int documentId, sbyte reaction)
         {
             if (reaction != 1 && reaction != -1)
-                return BadRequest("Reaction must be 1 or -1");
+                return BadRequest("Giá trị phản ứng phải là 1 hoặc -1.");
 
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
             if (decodedToken == null)
@@ -48,7 +48,7 @@ namespace DocShareAPI.Controllers.Auth
                 .FirstOrDefaultAsync();
 
             if (document == null)
-                return NotFound(new { message = "Document not found" });
+                return NotFound(new { message = "Không tìm thấy tài liệu." });
 
             bool canReact = document.is_public ||
                 document.user_id == userId ||

@@ -14,6 +14,7 @@ namespace DocShareAPI.Models
         public int? related_document_id { get; set; }
         public int? related_comment_id { get; set; }
         public int? related_report_id { get; set; }
+        public int? related_folder_id { get; set; }
         public string? target_url { get; set; }
         public string? metadata { get; set; }
         public bool is_read { get; set; } = false;
@@ -25,5 +26,6 @@ namespace DocShareAPI.Models
         public Users? ActorUser { get; set; }
         public Documents? RelatedDocument { get; set; }
         public Reports? RelatedReport { get; set; }
+        public Folders? RelatedFolder { get; set; }
     }
 }

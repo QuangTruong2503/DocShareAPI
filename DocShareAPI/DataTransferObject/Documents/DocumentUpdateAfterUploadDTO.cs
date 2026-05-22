@@ -12,6 +12,8 @@
 
         public ICollection<TageDTO>? tags { get; set; }
         public ICollection<string>? categories { get; set; }
+        public int? folder_id { get; set; }
+        public bool skip_discovery_metadata { get; set; }
     }
     public class TageDTO
     {

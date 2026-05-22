@@ -18,6 +18,7 @@ namespace DocShareAPI.Services
             int? relatedDocumentId = null,
             int? relatedCommentId = null,
             int? relatedReportId = null,
+            int? relatedFolderId = null,
             string? targetUrl = null,
             object? metadata = null);
 
@@ -34,6 +35,7 @@ namespace DocShareAPI.Services
         public int? relatedDocumentId { get; set; }
         public int? relatedCommentId { get; set; }
         public int? relatedReportId { get; set; }
+        public int? relatedFolderId { get; set; }
         public string? targetUrl { get; set; }
         public object? metadata { get; set; }
     }
@@ -58,6 +60,7 @@ namespace DocShareAPI.Services
             int? relatedDocumentId = null,
             int? relatedCommentId = null,
             int? relatedReportId = null,
+            int? relatedFolderId = null,
             string? targetUrl = null,
             object? metadata = null)
         {
@@ -73,6 +76,7 @@ namespace DocShareAPI.Services
                     relatedDocumentId = relatedDocumentId,
                     relatedCommentId = relatedCommentId,
                     relatedReportId = relatedReportId,
+                    relatedFolderId = relatedFolderId,
                     targetUrl = targetUrl,
                     metadata = metadata
                 }
@@ -94,6 +98,7 @@ namespace DocShareAPI.Services
                     related_document_id = r.relatedDocumentId,
                     related_comment_id = r.relatedCommentId,
                     related_report_id = r.relatedReportId,
+                    related_folder_id = r.relatedFolderId,
                     target_url = r.targetUrl,
                     metadata = r.metadata == null ? null : JsonSerializer.Serialize(r.metadata),
                     is_read = false,
@@ -146,6 +151,7 @@ namespace DocShareAPI.Services
                 notification.related_document_id,
                 notification.related_comment_id,
                 notification.related_report_id,
+                notification.related_folder_id,
                 notification.target_url,
                 notification.metadata,
                 notification.is_read,

@@ -98,6 +98,7 @@ var secretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
 // Đăng ký TokenServices với secretKey
 builder.Services.AddScoped<TokenServices>(_ => new TokenServices(secretKey));
 builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IFolderPermissionService, FolderPermissionService>();
 
 // Thêm dịch vụ xác thực JWT
 builder.Services.AddAuthentication(options =>

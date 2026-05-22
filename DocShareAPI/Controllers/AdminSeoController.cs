@@ -78,7 +78,7 @@ namespace DocShareAPI.Controllers
                 return error!;
 
             if (request == null || string.IsNullOrWhiteSpace(request.Content))
-                return BadRequest(new { message = "Nội dung robots.txt là bắt buộc.", errors = new[] { "content is required." } });
+                return BadRequest(new { message = "Nội dung robots.txt là bắt buộc.", errors = new[] { "Nội dung là bắt buộc." } });
 
             var settings = await GetOrCreateSettings();
             settings.robots_txt = NormalizeLineEndings(request.Content.Trim());
@@ -106,11 +106,11 @@ namespace DocShareAPI.Controllers
                 return error!;
 
             if (request == null || request.Routes.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
-                return BadRequest(new { message = "Danh sách routes là bắt buộc.", errors = new[] { "routes is required." } });
+                return BadRequest(new { message = "Danh sách routes là bắt buộc.", errors = new[] { "Danh sách routes là bắt buộc." } });
 
             var routeRequests = ParseRouteRequests(request.Routes);
             if (routeRequests == null)
-                return BadRequest(new { message = "Danh sách routes không hợp lệ.", errors = new[] { "routes must be an array of strings or objects." } });
+                return BadRequest(new { message = "Danh sách routes không hợp lệ.", errors = new[] { "Routes phải là mảng chuỗi hoặc mảng đối tượng." } });
 
             var routes = routeRequests
                 .Select(NormalizeRoute)
@@ -204,7 +204,7 @@ namespace DocShareAPI.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { message = "Không thể generate sitemap.xml.", errors = new[] { ex.Message } });
+                return StatusCode(500, new { message = "Không thể tạo sitemap.xml.", errors = new[] { ex.Message } });
             }
         }
 
@@ -257,24 +257,24 @@ namespace DocShareAPI.Controllers
             var errors = new List<string>();
             if (request == null)
             {
-                errors.Add("request body is required.");
+                errors.Add("Body request là bắt buộc.");
                 return errors;
             }
 
             if (string.IsNullOrWhiteSpace(request.SiteName))
-                errors.Add("siteName is required.");
+                errors.Add("siteName là bắt buộc.");
             if (!IsValidAbsoluteUrl(request.SiteUrl, out _))
-                errors.Add("siteUrl must be a valid absolute URL.");
+                errors.Add("siteUrl phải là URL tuyệt đối hợp lệ.");
             if (string.IsNullOrWhiteSpace(request.DefaultTitle))
-                errors.Add("defaultTitle is required.");
+                errors.Add("defaultTitle là bắt buộc.");
             else if (request.DefaultTitle.Trim().Length > 70)
-                errors.Add("defaultTitle must be at most 70 characters.");
+                errors.Add("defaultTitle không được vượt quá 70 ký tự.");
             if (string.IsNullOrWhiteSpace(request.DefaultDescription))
-                errors.Add("defaultDescription is required.");
+                errors.Add("defaultDescription là bắt buộc.");
             else if (request.DefaultDescription.Trim().Length > 180)
-                errors.Add("defaultDescription must be at most 180 characters.");
+                errors.Add("defaultDescription không được vượt quá 180 ký tự.");
             if (!IsValidAbsoluteUrl(request.DefaultImage, out _))
-                errors.Add("defaultImage must be a valid absolute URL.");
+                errors.Add("defaultImage phải là URL tuyệt đối hợp lệ.");
 
             return errors;
         }

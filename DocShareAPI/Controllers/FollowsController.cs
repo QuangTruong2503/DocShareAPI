@@ -30,7 +30,7 @@ namespace DocShareAPI.Controllers
 
             if (decodedToken.userID == followingID)
             {
-                return BadRequest(new { message = "You cannot follow yourself." });
+                return BadRequest(new { message = "Bạn không thể tự theo dõi chính mình." });
             }
 
             var targetUser = await _context.USERS
@@ -47,7 +47,7 @@ namespace DocShareAPI.Controllers
 
             if (targetUser == null)
             {
-                return NotFound(new { message = "User not found." });
+                return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
             var alreadyFollowing = await _context.FOLLOWS.AnyAsync(f =>
@@ -56,7 +56,7 @@ namespace DocShareAPI.Controllers
 
             if (alreadyFollowing)
             {
-                return Conflict(new { message = "You are already following this user." });
+                return Conflict(new { message = "Bạn đã theo dõi người dùng này." });
             }
 
             var follow = new Follows
@@ -89,7 +89,7 @@ namespace DocShareAPI.Controllers
 
             return Ok(new
             {
-                message = "Followed user successfully.",
+                message = "Theo dõi người dùng thành công.",
                 is_following = true,
                 follow = new
                 {
@@ -116,7 +116,7 @@ namespace DocShareAPI.Controllers
 
             if (follow == null)
             {
-                return NotFound(new { message = "Follow relationship not found." });
+                return NotFound(new { message = "Không tìm thấy quan hệ theo dõi." });
             }
 
             _context.FOLLOWS.Remove(follow);
@@ -124,7 +124,7 @@ namespace DocShareAPI.Controllers
 
             return Ok(new
             {
-                message = "Unfollowed user successfully.",
+                message = "Bỏ theo dõi người dùng thành công.",
                 is_following = false,
                 follower_id = decodedToken.userID,
                 following_id = followingID
@@ -142,7 +142,7 @@ namespace DocShareAPI.Controllers
 
             if (decodedToken.userID == followerID)
             {
-                return BadRequest(new { message = "You cannot remove yourself from your followers." });
+                return BadRequest(new { message = "Bạn không thể tự xóa mình khỏi danh sách người theo dõi." });
             }
 
             var follow = await _context.FOLLOWS.FirstOrDefaultAsync(f =>
@@ -151,7 +151,7 @@ namespace DocShareAPI.Controllers
 
             if (follow == null)
             {
-                return NotFound(new { message = "Follower relationship not found." });
+                return NotFound(new { message = "Không tìm thấy quan hệ người theo dõi." });
             }
 
             _context.FOLLOWS.Remove(follow);
@@ -159,7 +159,7 @@ namespace DocShareAPI.Controllers
 
             return Ok(new
             {
-                message = "Follower removed successfully.",
+                message = "Xóa người theo dõi thành công.",
                 follower_id = followerID,
                 following_id = decodedToken.userID
             });

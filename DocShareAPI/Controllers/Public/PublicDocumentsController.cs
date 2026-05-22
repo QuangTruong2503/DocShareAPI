@@ -1,6 +1,7 @@
 using DocShareAPI.Data;
 using DocShareAPI.Helpers.PageList;
 using DocShareAPI.Models;
+using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,10 +14,14 @@ namespace DocShareAPI.Controllers.Public
     public class PublicDocumentsController : ControllerBase
     {
         private readonly DocShareDbContext _context;
+        private readonly IFolderPermissionService _folderPermissionService;
 
-        public PublicDocumentsController(DocShareDbContext context)
+        public PublicDocumentsController(
+            DocShareDbContext context,
+            IFolderPermissionService folderPermissionService)
         {
             _context = context;
+            _folderPermissionService = folderPermissionService;
         }
 
         [HttpGet("document/{documentID}")]
@@ -67,28 +72,73 @@ namespace DocShareAPI.Controllers.Public
 
             if (document == null)
             {
-                return NotFound(new { message = "Document not found." });
+                return NotFound(new { message = "Không tìm thấy tài liệu." });
             }
 
-            // 2️⃣ Nếu document private → kiểm tra quyền
+            var folderAccess = await GetFolderAccessAsync(document.document_id, decodedToken);
+
+            // Nếu document private thì vẫn cho xem khi người dùng xem được folder chứa tài liệu.
             if (!document.is_public)
             {
-                if (decodedToken == null)
+                if (decodedToken == null && !folderAccess.CanView)
                 {
-                    return Unauthorized(new { message = "Login required to access this document." });
+                    return Unauthorized(new { message = "Bạn cần đăng nhập để truy cập tài liệu này." });
                 }
 
-                bool isOwner = decodedToken.userID == document.user_id;
-                bool isAdmin = decodedToken.roleID == "admin";
+                bool isOwner = decodedToken != null && decodedToken.userID == document.user_id;
+                bool isAdmin = string.Equals(decodedToken?.roleID, "admin", StringComparison.OrdinalIgnoreCase);
 
-                if (!isOwner && !isAdmin)
+                if (!isOwner && !isAdmin && !folderAccess.CanView)
                 {
                     return Forbid(); // 403
                 }
             }
 
-            return Ok(document);
+            return Ok(new
+            {
+                document.document_id,
+                document.user_id,
+                document.full_name,
+                document.Title,
+                document.Description,
+                document.file_url,
+                document.is_public,
+                document.download_count,
+                document.file_size,
+                document.file_type,
+                document.uploaded_at,
+                document.like_count,
+                document.dislike_count,
+                document.myReaction,
+                document.categories,
+                parent_folder_id = folderAccess.FolderId,
+                folder_visibility = folderAccess.Visibility,
+                access_source = document.is_public ? "public_document" : folderAccess.CanView ? "folder" : "owner_or_admin"
+            });
         }
+
+        private async Task<FolderAccess> GetFolderAccessAsync(int documentId, DecodedTokenResponse? decodedToken)
+        {
+            var folder = await _context.FOLDER_DOCUMENTS
+                .AsNoTracking()
+                .Where(fd => fd.document_id == documentId)
+                .Select(fd => new
+                {
+                    fd.folder_id,
+                    fd.Folder!.visibility
+                })
+                .FirstOrDefaultAsync();
+
+            if (folder == null)
+            {
+                return new FolderAccess(null, null, false);
+            }
+
+            var canView = await _folderPermissionService.CanViewFolderAsync(decodedToken?.userID, folder.folder_id);
+            return new FolderAccess(folder.folder_id, folder.visibility, canView);
+        }
+
+        private sealed record FolderAccess(int? FolderId, string? Visibility, bool CanView);
 
 
         //Lấy tài liệu theo search
@@ -97,7 +147,7 @@ namespace DocShareAPI.Controllers.Public
         {
             if (string.IsNullOrWhiteSpace(search))
             {
-                return BadRequest(new { message = "Search query is required." });
+                return BadRequest(new { message = "Từ khóa tìm kiếm là bắt buộc." });
             }
 
             var normalizedSearch = search.Trim().ToLower();
@@ -210,7 +260,7 @@ namespace DocShareAPI.Controllers.Public
             // Validate input
             if (documentIDs == null || !documentIDs.Any())
             {
-                return BadRequest(new { message = "No document IDs provided." });
+                return BadRequest(new { message = "Chưa cung cấp ID tài liệu nào." });
             }
 
             // Convert documentIDs to integers, handling invalid IDs
@@ -226,7 +276,7 @@ namespace DocShareAPI.Controllers.Public
 
             if (!validDocumentIDs.Any())
             {
-                return BadRequest(new { message = "No valid document IDs provided." });
+                return BadRequest(new { message = "Không có ID tài liệu hợp lệ nào được cung cấp." });
             }
 
             // Fetch all matching documents in a single query

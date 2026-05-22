@@ -1,4 +1,4 @@
-﻿using CloudinaryDotNet;
+using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using DocShareAPI.Data;
 using DocShareAPI.DataTransferObject;
@@ -181,7 +181,7 @@ namespace DocShareAPI.Controllers
                     var innerException = dbEx.InnerException?.Message ?? dbEx.Message;
                     return StatusCode(500, new
                     {
-                        message = "Lỗi khi lưu token vào database",
+                        message = "Lỗi khi lưu token vào cơ sở dữ liệu",
                         error = innerException,
                         success = false
                     });
@@ -528,11 +528,22 @@ namespace DocShareAPI.Controllers
 
         //Login with Google
         [HttpPost("public/request-login-google")]
+        [HttpPost("~/Users/public/request-login-google")]
         public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginRequest request)
         {
-            if (string.IsNullOrWhiteSpace(request.Token))
+            if (string.IsNullOrWhiteSpace(request.token))
             {
                 return BadRequest(new { success = false, message = "Token Google không hợp lệ" });
+            }
+
+            var googleClientId = Environment.GetEnvironmentVariable("GOOGLE_APP_CLIENT_ID") ?? _config["Google:ClientId"];
+            if (string.IsNullOrWhiteSpace(googleClientId))
+            {
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Google Client ID chưa được cấu hình."
+                });
             }
 
             GoogleJsonWebSignature.Payload payload;
@@ -540,10 +551,10 @@ namespace DocShareAPI.Controllers
             try
             {
                 payload = await GoogleJsonWebSignature.ValidateAsync(
-                    request.Token,
+                    request.token,
                     new GoogleJsonWebSignature.ValidationSettings
                     {
-                        Audience = new[] { Environment.GetEnvironmentVariable("GOOGLE_APP_CLIENT_ID") ?? _config["Google:ClientId"] }
+                        Audience = new[] { googleClientId }
                     });
 
             }
@@ -567,12 +578,20 @@ namespace DocShareAPI.Controllers
             if (payload.Issuer != "accounts.google.com" &&
                 payload.Issuer != "https://accounts.google.com")
             {
-                return Unauthorized("Invalid issuer");
+                return Unauthorized(new
+                {
+                    success = false,
+                    message = "Google token không đúng nhà phát hành."
+                });
             }
             if (payload.ExpirationTimeSeconds <
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds())
             {
-                return Unauthorized("Google token đã hết hạn");
+                return Unauthorized(new
+                {
+                    success = false,
+                    message = "Google token đã hết hạn"
+                });
             }
 
             var user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == payload.Email);
@@ -598,7 +617,7 @@ namespace DocShareAPI.Controllers
 
             // (Optional) Disable old tokens on same device
             await _context.TOKENS
-                .Where(t => t.user_id == user.user_id && t.user_device == request.UserDevice)
+                .Where(t => t.user_id == user.user_id && t.user_device == request.userDevice)
                 .ExecuteUpdateAsync(t => t.SetProperty(x => x.is_active, false));
 
             var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
@@ -612,7 +631,7 @@ namespace DocShareAPI.Controllers
                 expires_at = DateTime.UtcNow.AddDays(3),
                 is_active = true,
                 created_at = DateTime.UtcNow,
-                user_device = request.UserDevice
+                user_device = request.userDevice
             };
 
             _context.TOKENS.Add(tokenEntity);
@@ -682,7 +701,7 @@ namespace DocShareAPI.Controllers
             {
                 return BadRequest(new
                 {
-                    message = "Email và password không được để trống",
+                    message = "Email và mật khẩu không được để trống",
                     success = false
                 });
             }
@@ -730,7 +749,7 @@ namespace DocShareAPI.Controllers
             }
 
             if (image == null || image.Length == 0)
-                return BadRequest("Không có ảnh được upload");
+                return BadRequest("Không có ảnh được tải lên");
 
             var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp", "image/jpg" };
             if (!allowedTypes.Contains(image.ContentType))
@@ -760,7 +779,7 @@ namespace DocShareAPI.Controllers
             var uploadResult = await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
 
             if (uploadResult.Error != null)
-                return StatusCode(500, uploadResult.Error.Message);
+                return StatusCode(500, $"Không thể tải ảnh đại diện lên: {uploadResult.Error.Message}");
 
             if (!string.IsNullOrEmpty(user.avatar_public_id))
             {
