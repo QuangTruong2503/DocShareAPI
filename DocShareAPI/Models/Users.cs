@@ -21,6 +21,7 @@ namespace DocShareAPI.Models
         [Column(TypeName = "varchar(20)")]
         public TwoFactorMethod? two_factor_method { get; set; }
         public DateTime two_factor_verified_at { get; set; } = DateTime.UtcNow;
+        public long? storage_limit_bytes { get; set; }
 
         public ICollection<Tokens>? Tokens { get; set; }
         public ICollection<Likes>? Likes { get; set; }

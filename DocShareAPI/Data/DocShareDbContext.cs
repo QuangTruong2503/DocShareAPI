@@ -27,9 +27,21 @@ namespace DocShareAPI.Data
         public DbSet<FolderMembers> FOLDER_MEMBERS { get; set; }
         public DbSet<FolderInvites> FOLDER_INVITES { get; set; }
         public DbSet<SeoSettings> SEO_SETTINGS { get; set; }
+        public DbSet<Favorites> FAVORITES { get; set; }
+        public DbSet<ShareLinks> SHARE_LINKS { get; set; }
+        public DbSet<Comments> COMMENTS { get; set; }
+        public DbSet<DocumentViews> DOCUMENT_VIEWS { get; set; }
+        public DbSet<NotificationSettings> NOTIFICATION_SETTINGS { get; set; }
+        public DbSet<AuditLogs> AUDIT_LOGS { get; set; }
+        public DbSet<DocumentDownloads> DOCUMENT_DOWNLOADS { get; set; }
+        public DbSet<DocumentVersions> DOCUMENT_VERSIONS { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+            modelBuilder.Entity<Users>()
+                .Property(u => u.storage_limit_bytes)
+                .HasDefaultValue(10737418240L);
+
             modelBuilder.Entity<SeoSettings>()
                 .ToTable("SEO_SETTINGS");
             modelBuilder.Entity<SeoSettings>()
@@ -257,6 +269,177 @@ namespace DocShareAPI.Data
             modelBuilder.Entity<Likes>()
                 .HasIndex(l => new { l.user_id, l.document_id })
                 .IsUnique();
+            modelBuilder.Entity<Favorites>()
+                .Property(f => f.favorite_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<Favorites>()
+                .Property(f => f.item_type)
+                .HasMaxLength(30);
+            modelBuilder.Entity<Favorites>()
+                .HasIndex(f => new { f.user_id, f.item_type, f.item_id })
+                .IsUnique();
+            modelBuilder.Entity<Favorites>()
+                .HasOne(f => f.User)
+                .WithMany()
+                .HasForeignKey(f => f.user_id)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<ShareLinks>()
+                .Property(s => s.share_link_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<ShareLinks>()
+                .Property(s => s.token)
+                .HasMaxLength(128);
+            modelBuilder.Entity<ShareLinks>()
+                .Property(s => s.item_type)
+                .HasMaxLength(30);
+            modelBuilder.Entity<ShareLinks>()
+                .Property(s => s.access)
+                .HasMaxLength(50);
+            modelBuilder.Entity<ShareLinks>()
+                .Property(s => s.permission)
+                .HasMaxLength(30);
+            modelBuilder.Entity<ShareLinks>()
+                .HasIndex(s => s.token)
+                .IsUnique();
+            modelBuilder.Entity<ShareLinks>()
+                .HasIndex(s => new { s.owner_user_id, s.item_type, s.item_id, s.revoked_at });
+            modelBuilder.Entity<ShareLinks>()
+                .HasOne(s => s.OwnerUser)
+                .WithMany()
+                .HasForeignKey(s => s.owner_user_id)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<Comments>()
+                .Property(c => c.comment_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<Comments>()
+                .Property(c => c.content)
+                .HasColumnType("text");
+            modelBuilder.Entity<Comments>()
+                .HasIndex(c => new { c.document_id, c.created_at });
+            modelBuilder.Entity<Comments>()
+                .HasIndex(c => c.user_id);
+            modelBuilder.Entity<Comments>()
+                .HasOne(c => c.Document)
+                .WithMany()
+                .HasForeignKey(c => c.document_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<Comments>()
+                .HasOne(c => c.User)
+                .WithMany()
+                .HasForeignKey(c => c.user_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<Comments>()
+                .HasOne(c => c.ParentComment)
+                .WithMany(c => c.Replies)
+                .HasForeignKey(c => c.parent_comment_id)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<DocumentViews>()
+                .Property(v => v.view_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<DocumentViews>()
+                .Property(v => v.ip_hash)
+                .HasMaxLength(128);
+            modelBuilder.Entity<DocumentViews>()
+                .Property(v => v.source)
+                .HasMaxLength(50);
+            modelBuilder.Entity<DocumentViews>()
+                .HasIndex(v => new { v.document_id, v.viewed_at });
+            modelBuilder.Entity<DocumentViews>()
+                .HasIndex(v => new { v.user_id, v.viewed_at });
+            modelBuilder.Entity<DocumentViews>()
+                .HasOne(v => v.Document)
+                .WithMany()
+                .HasForeignKey(v => v.document_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<DocumentViews>()
+                .HasOne(v => v.User)
+                .WithMany()
+                .HasForeignKey(v => v.user_id)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<NotificationSettings>()
+                .Property(s => s.user_id)
+                .ValueGeneratedNever();
+            modelBuilder.Entity<NotificationSettings>()
+                .HasOne(s => s.User)
+                .WithMany()
+                .HasForeignKey(s => s.user_id)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<AuditLogs>()
+                .Property(a => a.audit_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<AuditLogs>()
+                .Property(a => a.action)
+                .HasMaxLength(100);
+            modelBuilder.Entity<AuditLogs>()
+                .Property(a => a.entity_type)
+                .HasMaxLength(50);
+            modelBuilder.Entity<AuditLogs>()
+                .Property(a => a.entity_id)
+                .HasMaxLength(100);
+            modelBuilder.Entity<AuditLogs>()
+                .Property(a => a.metadata)
+                .HasColumnType("json");
+            modelBuilder.Entity<AuditLogs>()
+                .HasIndex(a => new { a.entity_type, a.entity_id, a.created_at });
+            modelBuilder.Entity<AuditLogs>()
+                .HasIndex(a => new { a.actor_user_id, a.created_at });
+            modelBuilder.Entity<AuditLogs>()
+                .HasOne(a => a.ActorUser)
+                .WithMany()
+                .HasForeignKey(a => a.actor_user_id)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<DocumentDownloads>()
+                .Property(d => d.download_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<DocumentDownloads>()
+                .Property(d => d.source)
+                .HasMaxLength(50);
+            modelBuilder.Entity<DocumentDownloads>()
+                .Property(d => d.share_token)
+                .HasMaxLength(128);
+            modelBuilder.Entity<DocumentDownloads>()
+                .Property(d => d.ip_hash)
+                .HasMaxLength(128);
+            modelBuilder.Entity<DocumentDownloads>()
+                .HasIndex(d => new { d.document_id, d.downloaded_at });
+            modelBuilder.Entity<DocumentDownloads>()
+                .HasIndex(d => new { d.user_id, d.downloaded_at });
+            modelBuilder.Entity<DocumentDownloads>()
+                .HasOne(d => d.Document)
+                .WithMany()
+                .HasForeignKey(d => d.document_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<DocumentDownloads>()
+                .HasOne(d => d.User)
+                .WithMany()
+                .HasForeignKey(d => d.user_id)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<DocumentVersions>()
+                .Property(v => v.version_id)
+                .ValueGeneratedOnAdd();
+            modelBuilder.Entity<DocumentVersions>()
+                .Property(v => v.change_note)
+                .HasColumnType("text");
+            modelBuilder.Entity<DocumentVersions>()
+                .HasIndex(v => new { v.document_id, v.version_number })
+                .IsUnique();
+            modelBuilder.Entity<DocumentVersions>()
+                .HasOne(v => v.Document)
+                .WithMany()
+                .HasForeignKey(v => v.document_id)
+                .OnDelete(DeleteBehavior.Cascade);
+            modelBuilder.Entity<DocumentVersions>()
+                .HasOne(v => v.UploadedByUser)
+                .WithMany()
+                .HasForeignKey(v => v.uploaded_by)
+                .OnDelete(DeleteBehavior.Restrict);
             // Đảm bảo id tự động tăng
             modelBuilder.Entity<Collections>()
                 .Property(c => c.collection_id)
