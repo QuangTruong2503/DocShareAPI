@@ -177,6 +177,7 @@ namespace DocShareAPI.Controllers
                     u.Role,
                     u.is_verified,
                     u.two_factor_enabled,
+                    u.storage_limit_bytes,
                     document_count = u.Documents == null ? 0 : u.Documents.Count,
                     collection_count = u.Collections == null ? 0 : u.Collections.Count,
                     follower_count = u.Followers == null ? 0 : u.Followers.Count,

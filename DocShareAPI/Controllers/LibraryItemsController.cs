@@ -289,21 +289,6 @@ namespace DocShareAPI.Controllers
             return Ok(new { success = failed.Count == 0, deleted, failed });
         }
 
-        [HttpPut("{itemId:int}/favorite")]
-        public IActionResult FavoriteItem(int itemId, [FromBody] FavoriteLibraryItemRequest request)
-        {
-            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse)
-                return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
-
-            return Ok(new
-            {
-                id = itemId,
-                type = request.type,
-                isFavorite = false,
-                message = "Favorites are not enabled in the current database schema."
-            });
-        }
-
         private async Task TrashDocument(int documentId, DecodedTokenResponse decodedToken, List<object> trashed, List<object> failed)
         {
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == documentId);

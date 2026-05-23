@@ -86,8 +86,18 @@ namespace DocShareAPI.Services
         public async Task CreateManyAsync(IEnumerable<NotificationCreateRequest> requests)
         {
             var now = DateTime.UtcNow;
-            var notifications = requests
+            var requestList = requests
                 .Where(r => r.recipientUserId != Guid.Empty)
+                .ToList();
+
+            var disabledInAppUserIds = await _context.NOTIFICATION_SETTINGS
+                .AsNoTracking()
+                .Where(s => requestList.Select(r => r.recipientUserId).Contains(s.user_id) && !s.in_app_enabled)
+                .Select(s => s.user_id)
+                .ToListAsync();
+
+            var notifications = requestList
+                .Where(r => !disabledInAppUserIds.Contains(r.recipientUserId))
                 .Select(r => new Notifications
                 {
                     recipient_user_id = r.recipientUserId,

@@ -8,6 +8,7 @@ using DocShareAPI.Models;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -181,6 +182,10 @@ namespace DocShareAPI.Controllers.Auth
                 return Forbid("Tải lên thất bại! Vui lòng xác thực tài khoản trong phần cài đặt.");
             }
 
+            var quotaError = await ValidateStorageQuota(decodedTokenResponse.userID, file.Length);
+            if (quotaError != null)
+                return quotaError;
+
             IFormFile fileToUpload = file;
             MemoryStream? pdfStream = null;
             ImageUploadResult? uploadResult = null;
@@ -296,6 +301,10 @@ namespace DocShareAPI.Controllers.Auth
             {
                 return Forbid("Tải lên thất bại! Vui lòng xác thực tài khoản trong phần cài đặt.");
             }
+
+            var quotaError = await ValidateStorageQuota(decodedToken.userID, file.Length);
+            if (quotaError != null)
+                return quotaError;
 
             var folder = await _context.FOLDERS
                 .AsNoTracking()
@@ -445,6 +454,11 @@ namespace DocShareAPI.Controllers.Auth
                 return NotFound(new { success = false, code = "USER_NOT_FOUND", message = "Không tìm thấy người dùng." });
             if (!user.is_verified)
                 return Forbid("Tải lên thất bại! Vui lòng xác thực tài khoản trong phần cài đặt.");
+
+            var totalIncomingBytes = files.Where(f => f != null).Sum(f => f.Length);
+            var quotaError = await ValidateStorageQuota(decodedToken.userID, totalIncomingBytes);
+            if (quotaError != null)
+                return quotaError;
 
             Folders? parentFolder = null;
             if (parentFolderId.HasValue)
@@ -1020,6 +1034,14 @@ namespace DocShareAPI.Controllers.Auth
                 var contentType = "application/pdf"; // Hoặc loại MIME phù hợp với tài liệu của bạn
                 // Cập nhật số lượt tải xuống
                 document.download_count++;
+                _context.DOCUMENT_DOWNLOADS.Add(new DocumentDownloads
+                {
+                    document_id = document.document_id,
+                    user_id = decodedTokenResponse.userID,
+                    source = "authenticated_download",
+                    ip_hash = HashValue(HttpContext.Connection.RemoteIpAddress?.ToString()),
+                    downloaded_at = DateTime.UtcNow
+                });
                 await _context.SaveChangesAsync();  // Không cần transaction
 
                 if (IsDownloadMilestone(document.download_count) && document.user_id != decodedTokenResponse.userID)
@@ -1206,6 +1228,46 @@ namespace DocShareAPI.Controllers.Auth
 
             return folderId.HasValue &&
                 await _folderPermissionService.CanViewFolderAsync(decodedToken.userID, folderId.Value);
+        }
+
+        private async Task<ActionResult?> ValidateStorageQuota(Guid userId, long incomingBytes)
+        {
+            const long defaultStorageLimitBytes = 10L * 1024 * 1024 * 1024;
+            var limitBytes = await _context.USERS
+                .AsNoTracking()
+                .Where(u => u.user_id == userId)
+                .Select(u => u.storage_limit_bytes)
+                .FirstOrDefaultAsync() ?? defaultStorageLimitBytes;
+
+            var usedBytes = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Where(d => d.user_id == userId && d.deleted_at == null)
+                .SumAsync(d => (long)d.file_size);
+
+            if (usedBytes + incomingBytes <= limitBytes)
+                return null;
+
+            return StatusCode(StatusCodes.Status413PayloadTooLarge, new
+            {
+                success = false,
+                code = "STORAGE_QUOTA_EXCEEDED",
+                message = "Dung lượng lưu trữ không đủ để tải lên tài liệu này.",
+                storage = new
+                {
+                    usedBytes,
+                    incomingBytes,
+                    limitBytes,
+                    remainingBytes = Math.Max(0, limitBytes - usedBytes)
+                }
+            });
+        }
+
+        private static string? HashValue(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
         }
 
         private static object ToWorkspaceDocument(Documents document, int? parentFolderId)

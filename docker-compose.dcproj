@@ -10,6 +10,7 @@
     <DockerServiceName>docshareapi</DockerServiceName>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="csharp DocShareAPI\Controllers\LibraryItemsController.cs" />
     <None Include="docker-compose.override.yml">
       <DependentUpon>docker-compose.yml</DependentUpon>
     </None>

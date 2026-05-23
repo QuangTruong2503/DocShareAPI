@@ -111,17 +111,12 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpGet("favorites")]
-        public IActionResult GetFavorites([FromQuery] PaginationParams paginationParams)
+        public async Task<IActionResult> GetFavorites([FromQuery] PaginationParams paginationParams)
         {
-            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse)
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
-            return Ok(new
-            {
-                items = Array.Empty<object>(),
-                pagination = Pagination(1, paginationParams.PageSize, 0),
-                message = "Favorites are not enabled in the current database schema."
-            });
+            return await BuildLibraryResponse(decodedToken.userID, null, paginationParams, null, "updated_desc", null, null, null, true, includeNestedDocuments: true, includeNestedFolders: true);
         }
 
         [HttpGet("team")]
@@ -247,6 +242,11 @@ namespace DocShareAPI.Controllers
                 .AsNoTracking()
                 .Where(d => d.user_id == userId && d.deleted_at == null)
                 .SumAsync(d => (long)d.file_size);
+            var limitBytes = await _context.USERS
+                .AsNoTracking()
+                .Where(u => u.user_id == userId)
+                .Select(u => u.storage_limit_bytes)
+                .FirstOrDefaultAsync() ?? DefaultStorageLimitBytes;
 
             return Ok(new
             {
@@ -260,13 +260,13 @@ namespace DocShareAPI.Controllers
                     folders = libraryItems.folderCount,
                     documents = libraryItems.documentCount,
                     shared = libraryItems.sharedCount,
-                    favorites = 0,
+                    favorites = await _context.FAVORITES.AsNoTracking().CountAsync(f => f.user_id == userId),
                     trash = 0
                 },
                 storage = new
                 {
                     usedBytes,
-                    limitBytes = DefaultStorageLimitBytes
+                    limitBytes
                 }
             });
         }
@@ -305,14 +305,20 @@ namespace DocShareAPI.Controllers
                     ? foldersQuery.Where(f => f.visibility != "private" || f.FolderMembers.Any())
                     : foldersQuery.Where(f => f.visibility == "private" && !f.FolderMembers.Any());
             if (favorite == true)
-                foldersQuery = foldersQuery.Where(_ => false);
+                foldersQuery = foldersQuery.Where(f => _context.FAVORITES.Any(fav => fav.user_id == userId && fav.item_type == "folder" && fav.item_id == f.folder_id));
 
             var folders = await foldersQuery.ToListAsync();
+            var favoriteFolders = await _context.FAVORITES
+                .AsNoTracking()
+                .Where(f => f.user_id == userId && f.item_type == "folder")
+                .Select(f => f.item_id)
+                .ToListAsync();
+
             var folderItems = folders
                 .Select(f =>
                 {
                     var role = f.owner_user_id == userId ? "owner" : NormalizeWorkspaceRole(f.FolderMembers.FirstOrDefault(m => m.user_id == userId)?.role);
-                    return ToFolderItem(f, role, f.visibility != "private" || f.FolderMembers.Count > 0);
+                    return ToFolderItem(f, role, f.visibility != "private" || f.FolderMembers.Count > 0, favoriteFolders.Contains(f.folder_id));
                 })
                 .Cast<object>()
                 .ToList();
@@ -349,9 +355,14 @@ namespace DocShareAPI.Controllers
             if (shared.HasValue)
                 documentsQuery = documentsQuery.Where(d => d.is_public == shared.Value);
             if (favorite == true)
-                documentsQuery = documentsQuery.Where(_ => false);
+                documentsQuery = documentsQuery.Where(d => _context.FAVORITES.Any(fav => fav.user_id == userId && fav.item_type == "document" && fav.item_id == d.document_id));
 
             var documents = await documentsQuery.ToListAsync();
+            var favoriteDocuments = await _context.FAVORITES
+                .AsNoTracking()
+                .Where(f => f.user_id == userId && f.item_type == "document")
+                .Select(f => f.item_id)
+                .ToListAsync();
             var folderDocumentRole = parentFolderId.HasValue
                 ? NormalizeWorkspaceRole(await _permissionService.GetRoleAsync(userId, parentFolderId.Value))
                 : null;
@@ -364,7 +375,8 @@ namespace DocShareAPI.Controllers
                 .Select(d => ToDocumentItem(
                     d,
                     folderLinks.TryGetValue(d.document_id, out var folderId) ? folderId : null,
-                    folderDocumentRole ?? (d.user_id == userId ? "owner" : "viewer")))
+                    folderDocumentRole ?? (d.user_id == userId ? "owner" : "viewer"),
+                    favoriteDocuments.Contains(d.document_id)))
                 .Cast<object>()
                 .ToList();
 
@@ -374,7 +386,7 @@ namespace DocShareAPI.Controllers
             return (items, folderItems.Count, documentItems.Count, folderItems.Count(i => IsShared(i)) + documentItems.Count(i => IsShared(i)));
         }
 
-        internal static object ToFolderItem(Folders folder, string? role, bool isShared = false)
+        internal static object ToFolderItem(Folders folder, string? role, bool isShared = false, bool isFavorite = false)
         {
             var permission = NormalizeWorkspaceRole(role);
             var documentCount = folder.FolderDocuments?.Count ?? 0;
@@ -393,7 +405,7 @@ namespace DocShareAPI.Controllers
                 documentCount,
                 folderCount,
                 totalSize = folder.FolderDocuments?.Where(fd => fd.Document != null).Sum(fd => (long)fd.Document!.file_size) ?? 0,
-                isFavorite = false,
+                isFavorite,
                 isShared,
                 permission,
                 permissions = ItemPermissions(permission),
@@ -402,7 +414,7 @@ namespace DocShareAPI.Controllers
             };
         }
 
-        internal static object ToDocumentItem(Documents document, int? parentFolderId, string? role)
+        internal static object ToDocumentItem(Documents document, int? parentFolderId, string? role, bool isFavorite = false)
         {
             var permission = NormalizeWorkspaceRole(role);
             var extension = GetExtension(document);
@@ -423,7 +435,7 @@ namespace DocShareAPI.Controllers
                 previewUrl = $"/api/documents/{document.document_id}/preview",
                 downloadUrl = $"/api/documents/{document.document_id}/download",
                 status = "ready",
-                isFavorite = false,
+                isFavorite,
                 isShared = document.is_public,
                 allowDownload = true,
                 permission,
