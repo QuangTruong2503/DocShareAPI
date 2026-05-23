@@ -15,6 +15,7 @@ namespace DocShareAPI.Controllers
         private readonly ICloudinaryService _cloudinaryService;
         private readonly IFolderPermissionService _folderPermissionService;
         private readonly IAuditLogService _auditLogService;
+        private readonly HttpClient _httpClient;
         private readonly long _maxFileSize;
         private readonly string[] _allowedDocumentTypes;
 
@@ -23,12 +24,14 @@ namespace DocShareAPI.Controllers
             ICloudinaryService cloudinaryService,
             IFolderPermissionService folderPermissionService,
             IAuditLogService auditLogService,
+            IHttpClientFactory httpClientFactory,
             IConfiguration configuration)
         {
             _context = context;
             _cloudinaryService = cloudinaryService;
             _folderPermissionService = folderPermissionService;
             _auditLogService = auditLogService;
+            _httpClient = httpClientFactory.CreateClient();
             _maxFileSize = configuration.GetValue<long>("MaxFileSize", 10 * 1024 * 1024);
             _allowedDocumentTypes = configuration.GetSection("AllowedDocumentTypes")
                 .Get<string[]>() ?? new[]
@@ -241,6 +244,44 @@ namespace DocShareAPI.Controllers
             return Ok(new { success = true, restoredVersionId = restoredVersion.version_id, restoredVersionNumber = restoredVersion.version_number });
         }
 
+        [HttpGet("/api/documents/{documentId:int}/versions/{versionId:int}/download")]
+        public async Task<IActionResult> DownloadVersion(int documentId, int versionId)
+        {
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
+                return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
+
+            var document = await _context.DOCUMENTS.AsNoTracking().FirstOrDefaultAsync(d => d.document_id == documentId && d.deleted_at == null);
+            if (document == null)
+                return NotFound(Error("DOCUMENT_NOT_FOUND", "Không tìm thấy tài liệu."));
+            if (!await CanViewDocument(document, decodedToken))
+                return Forbid();
+
+            var version = await _context.DOCUMENT_VERSIONS
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.version_id == versionId && v.document_id == documentId);
+            if (version == null)
+                return NotFound(Error("VERSION_NOT_FOUND", "Không tìm thấy phiên bản."));
+
+            try
+            {
+                using var response = await _httpClient.GetAsync(version.file_url);
+                if (!response.IsSuccessStatusCode)
+                    return StatusCode(StatusCodes.Status502BadGateway, Error("VERSION_FILE_UNAVAILABLE", "Không tải được file phiên bản."));
+
+                var fileBytes = await response.Content.ReadAsByteArrayAsync();
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? GuessContentType(version.file_url);
+                var fileName = BuildVersionFileName(document.Title, version.version_number, contentType);
+
+                await _auditLogService.LogAsync(decodedToken.userID, "document_version.downloaded", "document", documentId.ToString(), new { versionId, version.version_number }, HttpContext.Connection.RemoteIpAddress?.ToString());
+
+                return File(fileBytes, contentType, fileName);
+            }
+            catch
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, Error("VERSION_FILE_UNAVAILABLE", "Không tải được file phiên bản."));
+            }
+        }
+
         private async Task<bool> CanViewDocument(Documents document, DecodedTokenResponse decodedToken)
         {
             if (document.is_public || document.user_id == decodedToken.userID || decodedToken.roleID == "admin")
@@ -272,7 +313,7 @@ namespace DocShareAPI.Controllers
         private bool IsValidDocument(IFormFile file, out string validationMessage)
         {
             validationMessage = string.Empty;
-            if (file.Length > _maxFileSize)
+            if (_maxFileSize > 0 && file.Length > _maxFileSize)
             {
                 validationMessage = $"Kích thước file vượt quá giới hạn cho phép ({_maxFileSize / 1024 / 1024}MB).";
                 return false;
@@ -327,6 +368,38 @@ namespace DocShareAPI.Controllers
             };
 
             return await _cloudinaryService.Cloudinary.UploadAsync(uploadParams);
+        }
+
+        private static string GuessContentType(string fileUrl)
+        {
+            var extension = Path.GetExtension(fileUrl.Split('?')[0]).TrimStart('.').ToLowerInvariant();
+            return extension switch
+            {
+                "pdf" => "application/pdf",
+                "doc" => "application/msword",
+                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "txt" => "text/plain",
+                _ => "application/octet-stream"
+            };
+        }
+
+        private static string BuildVersionFileName(string documentTitle, int versionNumber, string contentType)
+        {
+            var extension = Path.GetExtension(documentTitle);
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                extension = contentType switch
+                {
+                    "application/pdf" => ".pdf",
+                    "application/msword" => ".doc",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+                    "text/plain" => ".txt",
+                    _ => ""
+                };
+            }
+
+            var baseName = Path.GetFileNameWithoutExtension(documentTitle);
+            return $"{baseName}-v{versionNumber}{extension}";
         }
 
         private static object Error(string code, string message, object? details = null) => new { success = false, code, message, details };

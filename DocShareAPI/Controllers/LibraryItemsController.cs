@@ -1,4 +1,5 @@
 using DocShareAPI.Data;
+using DocShareAPI.Helpers;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -124,16 +125,55 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpPost("copy")]
-        public IActionResult CopyItems([FromBody] MoveLibraryItemsRequest request)
+        public async Task<IActionResult> CopyItems([FromBody] MoveLibraryItemsRequest request)
         {
-            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse)
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
-            return Ok(new
+            if (request.items == null || request.items.Count == 0)
+                return BadRequest(Error("VALIDATION_ERROR", "items là bắt buộc."));
+
+            if (request.targetFolderId.HasValue)
             {
-                copied = Array.Empty<object>(),
-                failed = request.items?.Select(i => new { i.id, i.type, code = "COPY_NOT_ENABLED", message = "Copy chưa được bật trong schema hiện tại." }).ToArray() ?? Array.Empty<object>()
+                if (!await _context.FOLDERS.AnyAsync(f => f.folder_id == request.targetFolderId.Value && f.deleted_at == null) ||
+                    !await _permissionService.CanViewFolderAsync(decodedToken.userID, request.targetFolderId.Value))
+                    return NotFound(Error("FOLDER_NOT_FOUND", "Không tìm thấy thư mục đích."));
+                if (!await _permissionService.CanAddDocumentToFolderAsync(decodedToken.userID, request.targetFolderId.Value))
+                    return Forbid();
+            }
+
+            var copied = new List<object>();
+            var failed = new List<object>();
+            var strategy = _context.Database.CreateExecutionStrategy();
+
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+                foreach (var item in request.items)
+                {
+                    var type = NormalizeType(item.type);
+                    if (type == "document")
+                    {
+                        await CopyDocument(item.id, request.targetFolderId, decodedToken, copied, failed);
+                    }
+                    else if (type == "folder")
+                    {
+                        if (request.targetFolderId == item.id || (request.targetFolderId.HasValue && await IsDescendant(item.id, request.targetFolderId.Value)))
+                            failed.Add(new { item.id, item.type, code = "CANNOT_COPY_FOLDER_INTO_DESCENDANT", message = "Không thể sao chép thư mục vào chính nó hoặc thư mục con của nó." });
+                        else
+                            await CopyFolderTree(item.id, request.targetFolderId, decodedToken, copied, failed);
+                    }
+                    else
+                    {
+                        failed.Add(new { item.id, item.type, code = "VALIDATION_ERROR", message = "type không hợp lệ." });
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
             });
+
+            return Ok(new { success = failed.Count == 0, copied, failed });
         }
 
         [HttpPost("/api/folders/merge")]
@@ -681,6 +721,158 @@ namespace DocShareAPI.Controllers
             }
 
             moved.Add(new { id = documentId, type = "document", parentFolderId = targetFolderId });
+        }
+
+        private async Task CopyDocument(int documentId, int? targetFolderId, DecodedTokenResponse decodedToken, List<object> copied, List<object> failed)
+        {
+            var source = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Include(d => d.DocumentCategories)
+                .Include(d => d.DocumentTags)
+                .FirstOrDefaultAsync(d => d.document_id == documentId && d.deleted_at == null);
+
+            if (source == null)
+            {
+                failed.Add(new { id = documentId, type = "document", code = "DOCUMENT_NOT_FOUND", message = "Không tìm thấy tài liệu." });
+                return;
+            }
+            if (!await CanCopyDocument(source, decodedToken))
+            {
+                failed.Add(new { id = documentId, type = "document", code = "FORBIDDEN", message = "Không có quyền sao chép tài liệu." });
+                return;
+            }
+
+            var newDocumentId = await GenerateUniqueDocumentId();
+            var copiedTitle = await UniqueDocumentName(decodedToken.userID, targetFolderId, BuildCopyName(source.Title), newDocumentId);
+            var newDocument = new Documents
+            {
+                document_id = newDocumentId,
+                user_id = decodedToken.userID,
+                Title = copiedTitle,
+                Description = source.Description,
+                public_id = source.public_id,
+                asset_id = source.asset_id,
+                file_url = source.file_url,
+                thumbnail_url = source.thumbnail_url,
+                file_type = source.file_type,
+                file_size = source.file_size,
+                pages = source.pages,
+                is_public = false,
+                uploaded_at = DateTime.UtcNow
+            };
+
+            _context.DOCUMENTS.Add(newDocument);
+
+            if (targetFolderId.HasValue)
+            {
+                _context.FOLDER_DOCUMENTS.Add(new FolderDocuments
+                {
+                    folder_id = targetFolderId.Value,
+                    document_id = newDocumentId,
+                    added_by_user_id = decodedToken.userID,
+                    added_at = DateTime.UtcNow
+                });
+            }
+
+            if (source.DocumentCategories.Count > 0)
+            {
+                await _context.DOCUMENT_CATEGORIES.AddRangeAsync(source.DocumentCategories.Select(c => new DocumentCategories
+                {
+                    document_id = newDocumentId,
+                    category_id = c.category_id
+                }));
+            }
+
+            if (source.DocumentTags?.Count > 0)
+            {
+                await _context.DOCUMENT_TAGS.AddRangeAsync(source.DocumentTags.Select(t => new DocumentTags
+                {
+                    document_id = newDocumentId,
+                    tag_id = t.tag_id
+                }));
+            }
+
+            copied.Add(new { sourceId = documentId, id = newDocumentId, type = "document", name = copiedTitle, parentFolderId = targetFolderId });
+        }
+
+        private async Task<int?> CopyFolderTree(int sourceFolderId, int? targetParentFolderId, DecodedTokenResponse decodedToken, List<object> copied, List<object> failed)
+        {
+            var source = await _context.FOLDERS
+                .AsNoTracking()
+                .FirstOrDefaultAsync(f => f.folder_id == sourceFolderId && f.deleted_at == null);
+
+            if (source == null)
+            {
+                failed.Add(new { id = sourceFolderId, type = "folder", code = "FOLDER_NOT_FOUND", message = "Không tìm thấy thư mục." });
+                return null;
+            }
+            if (!await _permissionService.CanViewFolderAsync(decodedToken.userID, sourceFolderId))
+            {
+                failed.Add(new { id = sourceFolderId, type = "folder", code = "FORBIDDEN", message = "Không có quyền sao chép thư mục." });
+                return null;
+            }
+
+            var name = await UniqueFolderName(decodedToken.userID, targetParentFolderId, BuildCopyName(source.name), 0);
+            var newFolder = new Folders
+            {
+                owner_user_id = decodedToken.userID,
+                parent_folder_id = targetParentFolderId,
+                name = name,
+                description = source.description,
+                visibility = "private",
+                created_at = DateTime.UtcNow,
+                updated_at = DateTime.UtcNow
+            };
+
+            _context.FOLDERS.Add(newFolder);
+            await _context.SaveChangesAsync();
+            copied.Add(new { sourceId = sourceFolderId, id = newFolder.folder_id, type = "folder", name, parentFolderId = targetParentFolderId });
+
+            var documentIds = await _context.FOLDER_DOCUMENTS
+                .AsNoTracking()
+                .Where(fd => fd.folder_id == sourceFolderId && fd.Document != null && fd.Document.deleted_at == null)
+                .Select(fd => fd.document_id)
+                .ToListAsync();
+
+            foreach (var documentId in documentIds)
+                await CopyDocument(documentId, newFolder.folder_id, decodedToken, copied, failed);
+
+            var childFolderIds = await _context.FOLDERS
+                .AsNoTracking()
+                .Where(f => f.parent_folder_id == sourceFolderId && f.deleted_at == null)
+                .Select(f => f.folder_id)
+                .ToListAsync();
+
+            foreach (var childFolderId in childFolderIds)
+                await CopyFolderTree(childFolderId, newFolder.folder_id, decodedToken, copied, failed);
+
+            return newFolder.folder_id;
+        }
+
+        private async Task<bool> CanCopyDocument(Documents document, DecodedTokenResponse decodedToken)
+        {
+            if (document.is_public || document.user_id == decodedToken.userID || decodedToken.roleID == "admin")
+                return true;
+
+            var folderId = await GetDocumentParentFolderId(document.document_id);
+            return folderId.HasValue && await _permissionService.CanViewFolderAsync(decodedToken.userID, folderId.Value);
+        }
+
+        private async Task<int> GenerateUniqueDocumentId()
+        {
+            var candidate = GenerateRandomCode.GenerateID();
+            while (await _context.DOCUMENTS.AnyAsync(d => d.document_id == candidate))
+                candidate = GenerateRandomCode.GenerateID();
+            return candidate;
+        }
+
+        private static string BuildCopyName(string name)
+        {
+            var extension = Path.GetExtension(name);
+            var baseName = Path.GetFileNameWithoutExtension(name);
+            if (string.IsNullOrWhiteSpace(baseName))
+                baseName = name;
+            return $"{baseName} (copy){extension}";
         }
 
         private async Task MoveFolder(int folderId, int? targetFolderId, DecodedTokenResponse decodedToken, List<object> moved, List<object> failed)

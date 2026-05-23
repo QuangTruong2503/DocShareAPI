@@ -311,9 +311,43 @@ namespace DocShareAPI.Controllers
             var folder = await _context.FOLDERS
                 .AsNoTracking()
                 .Include(f => f.OwnerUser)
+                .Include(f => f.ChildFolders.Where(child => child.deleted_at == null))
+                    .ThenInclude(child => child.OwnerUser)
+                .Include(f => f.ChildFolders.Where(child => child.deleted_at == null))
+                    .ThenInclude(child => child.FolderDocuments)
+                        .ThenInclude(fd => fd.Document)
+                .Include(f => f.FolderDocuments.Where(fd => fd.Document != null && fd.Document.deleted_at == null))
+                    .ThenInclude(fd => fd.Document)
+                        .ThenInclude(d => d!.Users)
                 .FirstOrDefaultAsync(f => f.folder_id == link.item_id && f.deleted_at == null);
 
-            return folder == null ? null : LibraryController.ToFolderItem(folder, link.permission, isShared: true);
+            if (folder == null)
+                return null;
+
+            var childFolders = folder.ChildFolders
+                .Where(child => child.deleted_at == null)
+                .Select(child => LibraryController.ToFolderItem(child, link.permission, isShared: true))
+                .Cast<object>();
+            var documents = folder.FolderDocuments
+                .Where(fd => fd.Document != null && fd.Document.deleted_at == null)
+                .Select(fd => LibraryController.ToDocumentItem(fd.Document!, folder.folder_id, link.permission))
+                .Cast<object>();
+
+            return new
+            {
+                id = folder.folder_id,
+                type = "folder",
+                name = folder.name,
+                title = folder.name,
+                description = folder.description,
+                ownerId = folder.owner_user_id,
+                ownerName = folder.OwnerUser?.full_name ?? folder.OwnerUser?.Username,
+                permission = link.permission,
+                items = childFolders.Concat(documents).ToList(),
+                childrenCount = folder.ChildFolders.Count + folder.FolderDocuments.Count,
+                createdAt = folder.created_at,
+                updatedAt = folder.updated_at
+            };
         }
 
         private async Task<object> ToResponse(ShareLinks link)

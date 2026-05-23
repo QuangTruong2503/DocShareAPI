@@ -526,6 +526,61 @@ namespace DocShareAPI.Controllers
             }
         }
 
+        [HttpPost("request-disable-2fa")]
+        [Authorize]
+        public async Task<IActionResult> DisableTwoFactor([FromBody] Disable2FARequest? request = null)
+        {
+            var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
+            if (decodedToken == null)
+            {
+                return Unauthorized();
+            }
+
+            var user = await _context.USERS.FirstOrDefaultAsync(u => u.user_id == decodedToken.userID);
+            if (user == null)
+            {
+                return NotFound(new { message = "Không tìm thấy người dùng", success = false });
+            }
+
+            if (!user.two_factor_enabled)
+            {
+                return Ok(new
+                {
+                    success = true,
+                    message = "Xác thực hai yếu tố đã được tắt từ trước.",
+                    twoFactorEnabled = false
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(request?.Password) &&
+                !string.IsNullOrWhiteSpace(user.password_hash) &&
+                !PasswordHasher.VerifyPassword(request.Password, user.password_hash))
+            {
+                return BadRequest(new { success = false, message = "Mật khẩu không chính xác." });
+            }
+
+            user.two_factor_enabled = false;
+            user.two_factor_method = TwoFactorMethod.Email;
+            user.two_factor_verified_at = DateTime.UtcNow;
+
+            await _context.TOKENS
+                .Where(t => t.user_id == user.user_id &&
+                    (t.type == TokenType.TwoFactorEnable || t.type == TokenType.TwoFactorLogin) &&
+                    t.is_active)
+                .ExecuteUpdateAsync(t => t.SetProperty(x => x.is_active, false));
+
+            await DeleteTwoFactorCode(user.user_id);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Đã tắt xác thực hai yếu tố.",
+                twoFactorEnabled = false,
+                twoFactorMethod = user.two_factor_method.ToString()
+            });
+        }
+
         //Login with Google
         [HttpPost("public/request-login-google")]
         [HttpPost("~/Users/public/request-login-google")]
@@ -952,6 +1007,11 @@ namespace DocShareAPI.Controllers
         {
             public required string TempToken { get; set; }
             public required string Code { get; set; }
+        }
+
+        public class Disable2FARequest
+        {
+            public string? Password { get; set; }
         }
     }
 }
