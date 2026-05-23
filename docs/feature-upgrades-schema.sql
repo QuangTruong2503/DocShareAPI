@@ -1,6 +1,8 @@
 -- DocShareAPI feature upgrades schema
 -- Run once against the DocShare MySQL database before using the new APIs.
 -- If your USERS table already has storage_limit_bytes, skip the ALTER statement.
+-- If the database already had COMMENTS before this schema was added, also run:
+-- docs/feature-upgrades-existing-db-migration.sql
 
 ALTER TABLE USERS
   ADD COLUMN storage_limit_bytes BIGINT NULL DEFAULT 10737418240;

@@ -235,7 +235,7 @@ namespace DocShareAPI.Controllers
             var normalizedDays = Math.Clamp(days, 1, 365);
             var since = DateTime.UtcNow.AddDays(-normalizedDays);
 
-            var dailyViews = await _context.DOCUMENT_VIEWS
+            var dailyViewRows = await _context.DOCUMENT_VIEWS
                 .AsNoTracking()
                 .Where(v => v.viewed_at >= since)
                 .GroupBy(v => v.viewed_at.Date)
@@ -243,7 +243,7 @@ namespace DocShareAPI.Controllers
                 .OrderBy(x => x.date)
                 .ToListAsync();
 
-            var dailyDownloads = await _context.DOCUMENT_DOWNLOADS
+            var dailyDownloadRows = await _context.DOCUMENT_DOWNLOADS
                 .AsNoTracking()
                 .Where(d => d.downloaded_at >= since)
                 .GroupBy(d => d.downloaded_at.Date)
@@ -251,14 +251,29 @@ namespace DocShareAPI.Controllers
                 .OrderBy(x => x.date)
                 .ToListAsync();
 
+            var dailyViewCounts = dailyViewRows.ToDictionary(x => DateOnly.FromDateTime(x.date), x => x.count);
+            var dailyDownloadCounts = dailyDownloadRows.ToDictionary(x => DateOnly.FromDateTime(x.date), x => x.count);
+            var daysRange = Enumerable.Range(0, normalizedDays)
+                .Select(offset => DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-(normalizedDays - 1 - offset))))
+                .ToList();
+            var dailyViews = daysRange.Select(date => new { date = date.ToString("yyyy-MM-dd"), count = dailyViewCounts.GetValueOrDefault(date) }).ToList();
+            var dailyDownloads = daysRange.Select(date => new { date = date.ToString("yyyy-MM-dd"), count = dailyDownloadCounts.GetValueOrDefault(date) }).ToList();
+            var totalViews = await _context.DOCUMENT_VIEWS.CountAsync(v => v.viewed_at >= since);
+            var totalDownloads = await _context.DOCUMENT_DOWNLOADS.CountAsync(d => d.downloaded_at >= since);
+
             return Ok(new
             {
                 success = true,
+                days = normalizedDays,
+                totalViews,
+                totalDownloads,
+                dailyViews,
+                dailyDownloads,
                 data = new
                 {
                     days = normalizedDays,
-                    totalViews = await _context.DOCUMENT_VIEWS.CountAsync(v => v.viewed_at >= since),
-                    totalDownloads = await _context.DOCUMENT_DOWNLOADS.CountAsync(d => d.downloaded_at >= since),
+                    totalViews,
+                    totalDownloads,
                     dailyViews,
                     dailyDownloads
                 }

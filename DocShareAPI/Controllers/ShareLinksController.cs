@@ -211,6 +211,47 @@ namespace DocShareAPI.Controllers
             });
         }
 
+        [AllowAnonymous]
+        [HttpGet("/api/s/{shareToken}/download")]
+        public async Task<IActionResult> DownloadPublicShare(string shareToken)
+        {
+            var link = await GetActivePublicLink(shareToken);
+            if (link == null)
+                return NotFound(Error("SHARE_LINK_NOT_FOUND", "Không tìm thấy share link."));
+
+            var availabilityError = ValidateAvailability(link);
+            if (availabilityError != null)
+                return availabilityError;
+
+            if (!link.allow_download)
+                return Forbid();
+
+            if (!string.Equals(link.item_type, "document", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(Error("UNSUPPORTED_ITEM_TYPE", "Chỉ hỗ trợ tải tài liệu qua public share link."));
+
+            if (!string.IsNullOrEmpty(link.password_hash))
+                return Forbid();
+
+            var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == link.item_id && d.deleted_at == null);
+            if (document == null)
+                return NotFound(Error("DOCUMENT_NOT_FOUND", "Không tìm thấy tài liệu."));
+
+            link.download_count++;
+            link.updated_at = DateTime.UtcNow;
+            document.download_count++;
+            _context.DOCUMENT_DOWNLOADS.Add(new DocumentDownloads
+            {
+                document_id = document.document_id,
+                source = "public_share",
+                share_token = link.token,
+                ip_hash = HashValue(HttpContext.Connection.RemoteIpAddress?.ToString()),
+                downloaded_at = DateTime.UtcNow
+            });
+            await _context.SaveChangesAsync();
+
+            return Redirect(document.file_url);
+        }
+
         private async Task<ShareLinks?> GetActivePublicLink(string shareToken)
         {
             return await _context.SHARE_LINKS
@@ -248,7 +289,23 @@ namespace DocShareAPI.Controllers
                     .Include(d => d.Users)
                     .FirstOrDefaultAsync(d => d.document_id == link.item_id && d.deleted_at == null);
 
-                return document == null ? null : LibraryController.ToDocumentItem(document, null, link.permission);
+                return document == null ? null : new
+                {
+                    id = document.document_id,
+                    type = "document",
+                    title = document.Title,
+                    name = document.Title,
+                    description = document.Description,
+                    fileUrl = document.file_url,
+                    previewUrl = document.file_url,
+                    downloadUrl = link.allow_download && string.IsNullOrEmpty(link.password_hash) ? $"/api/s/{link.token}/download" : null,
+                    thumbnailUrl = document.thumbnail_url,
+                    ownerId = document.user_id,
+                    ownerName = document.Users?.full_name ?? document.Users?.Username,
+                    size = document.file_size,
+                    createdAt = document.uploaded_at,
+                    updatedAt = document.uploaded_at
+                };
             }
 
             var folder = await _context.FOLDERS
@@ -304,6 +361,14 @@ namespace DocShareAPI.Controllers
         }
 
         private static string GenerateToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(18)).Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        private static string? HashValue(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)));
+        }
+
         private static object Error(string code, string message, object? details = null) => new { success = false, code, message, details };
     }
 

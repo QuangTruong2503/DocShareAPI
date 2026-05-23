@@ -66,7 +66,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
-                comments = comments.Select(c => ToResponse(c, decodedToken?.userID, replies.Where(r => r.parent_comment_id == c.comment_id))),
+                comments = comments.Select(c => ToResponse(c, decodedToken?.userID, decodedToken?.roleID, replies.Where(r => r.parent_comment_id == c.comment_id))),
                 pagination = new
                 {
                     currentPage = page,
@@ -104,6 +104,9 @@ namespace DocShareAPI.Controllers
 
                 if (parentComment == null)
                     return NotFound(Error("PARENT_COMMENT_NOT_FOUND", "Không tìm thấy bình luận cha."));
+
+                if (parentComment.parent_comment_id.HasValue)
+                    return BadRequest(Error("COMMENT_DEPTH_LIMIT", "Bình luận chỉ hỗ trợ phản hồi 1 cấp."));
             }
 
             var now = DateTime.UtcNow;
@@ -152,7 +155,7 @@ namespace DocShareAPI.Controllers
                 .Include(c => c.User)
                 .FirstAsync(c => c.comment_id == comment.comment_id);
 
-            return Ok(new { success = true, comment = ToResponse(saved, decodedToken.userID, Array.Empty<Comments>()) });
+            return Ok(new { success = true, comment = ToResponse(saved, decodedToken.userID, decodedToken.roleID, Array.Empty<Comments>()) });
         }
 
         [HttpPatch("/api/comments/{commentId:int}")]
@@ -227,8 +230,11 @@ namespace DocShareAPI.Controllers
             return folderId.HasValue && await _folderPermissionService.CanViewFolderAsync(decodedToken.userID, folderId.Value);
         }
 
-        private static object ToResponse(Comments comment, Guid? currentUserId, IEnumerable<Comments> replies)
+        private static object ToResponse(Comments comment, Guid? currentUserId, string? currentUserRole, IEnumerable<Comments> replies)
         {
+            var canModerate = string.Equals(currentUserRole, "admin", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(currentUserRole, "moderator", StringComparison.OrdinalIgnoreCase);
+
             return new
             {
                 id = comment.comment_id,
@@ -242,10 +248,10 @@ namespace DocShareAPI.Controllers
                     fullName = comment.User?.full_name,
                     avatarUrl = comment.User?.avatar_url
                 },
-                canEdit = currentUserId.HasValue && currentUserId.Value == comment.user_id,
+                canEdit = currentUserId.HasValue && (currentUserId.Value == comment.user_id || canModerate),
                 createdAt = comment.created_at,
                 updatedAt = comment.updated_at,
-                replies = replies.Select(r => ToResponse(r, currentUserId, Array.Empty<Comments>()))
+                replies = replies.Select(r => ToResponse(r, currentUserId, currentUserRole, Array.Empty<Comments>()))
             };
         }
 

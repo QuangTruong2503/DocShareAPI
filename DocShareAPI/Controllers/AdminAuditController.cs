@@ -52,8 +52,15 @@ namespace DocShareAPI.Controllers
                 .Take(pageSize)
                 .Select(a => new
                 {
-                    a.audit_id,
-                    a.actor_user_id,
+                    id = a.audit_id,
+                    createdAt = a.created_at,
+                    actorUserId = a.actor_user_id,
+                    entityType = a.entity_type,
+                    entityId = a.entity_id,
+                    description = a.action,
+                    metadata = a.metadata,
+                    audit_id = a.audit_id,
+                    actor_user_id = a.actor_user_id,
                     actor = a.ActorUser == null ? null : new
                     {
                         a.ActorUser.user_id,
@@ -62,17 +69,17 @@ namespace DocShareAPI.Controllers
                         a.ActorUser.avatar_url
                     },
                     a.action,
-                    a.entity_type,
-                    a.entity_id,
-                    a.metadata,
-                    a.ip_address,
-                    a.created_at
+                    entity_type = a.entity_type,
+                    entity_id = a.entity_id,
+                    ip_address = a.ip_address,
+                    created_at = a.created_at
                 })
                 .ToListAsync();
 
             return Ok(new
             {
                 success = true,
+                auditLogs = logs,
                 logs,
                 pagination = new
                 {

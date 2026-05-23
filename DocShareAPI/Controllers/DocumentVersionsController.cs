@@ -59,14 +59,29 @@ namespace DocShareAPI.Controllers
                 .OrderByDescending(v => v.version_number)
                 .Select(v => new
                 {
-                    v.version_id,
-                    v.document_id,
-                    v.version_number,
-                    v.file_url,
-                    v.file_size,
+                    id = v.version_id,
+                    documentId = v.document_id,
+                    versionNumber = v.version_number,
+                    fileUrl = v.file_url,
+                    fileSize = v.file_size,
                     v.pages,
-                    v.change_note,
-                    v.created_at,
+                    changeNote = v.change_note,
+                    createdAt = v.created_at,
+                    uploader = v.UploadedByUser == null ? null : new
+                    {
+                        userId = v.UploadedByUser.user_id,
+                        username = v.UploadedByUser.Username,
+                        fullName = v.UploadedByUser.full_name,
+                        avatarUrl = v.UploadedByUser.avatar_url
+                    },
+                    version_id = v.version_id,
+                    document_id = v.document_id,
+                    version_number = v.version_number,
+                    file_url = v.file_url,
+                    file_size = v.file_size,
+                    pages_count = v.pages,
+                    change_note = v.change_note,
+                    created_at = v.created_at,
                     uploadedBy = v.UploadedByUser == null ? null : new
                     {
                         v.UploadedByUser.user_id,
@@ -96,6 +111,10 @@ namespace DocShareAPI.Controllers
                 return NotFound(Error("DOCUMENT_NOT_FOUND", "Không tìm thấy tài liệu."));
             if (!await CanEditDocument(document, decodedToken))
                 return Forbid();
+
+            var quotaError = await ValidateStorageQuota(document.user_id, file.Length);
+            if (quotaError != null)
+                return quotaError;
 
             var uploadResult = await UploadToCloudinary(file);
             if (uploadResult == null || uploadResult.Error != null)
@@ -155,6 +174,13 @@ namespace DocShareAPI.Controllers
                 success = true,
                 version = new
                 {
+                    id = newVersion.version_id,
+                    documentId = newVersion.document_id,
+                    versionNumber = newVersion.version_number,
+                    fileUrl = newVersion.file_url,
+                    fileSize = newVersion.file_size,
+                    changeNote = newVersion.change_note,
+                    createdAt = newVersion.created_at,
                     newVersion.version_id,
                     newVersion.document_id,
                     newVersion.version_number,
@@ -259,6 +285,32 @@ namespace DocShareAPI.Controllers
             }
 
             return true;
+        }
+
+        private async Task<IActionResult?> ValidateStorageQuota(Guid ownerUserId, long incomingBytes)
+        {
+            const long defaultStorageLimitBytes = 10L * 1024 * 1024 * 1024;
+            var limitBytes = await _context.USERS
+                .AsNoTracking()
+                .Where(u => u.user_id == ownerUserId)
+                .Select(u => u.storage_limit_bytes)
+                .FirstOrDefaultAsync() ?? defaultStorageLimitBytes;
+
+            var usedBytes = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Where(d => d.user_id == ownerUserId && d.deleted_at == null)
+                .SumAsync(d => (long)d.file_size);
+
+            if (usedBytes + incomingBytes <= limitBytes)
+                return null;
+
+            return StatusCode(StatusCodes.Status413PayloadTooLarge, Error("STORAGE_QUOTA_EXCEEDED", "Dung lượng lưu trữ không đủ để tải lên phiên bản mới.", new
+            {
+                usedBytes,
+                incomingBytes,
+                limitBytes,
+                remainingBytes = Math.Max(0, limitBytes - usedBytes)
+            }));
         }
 
         private async Task<ImageUploadResult> UploadToCloudinary(IFormFile file)
