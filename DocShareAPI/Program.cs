@@ -5,11 +5,17 @@ using DocShareAPI.Services;
 using DocShareAPI.Services.EmailServices;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = null;
+});
 
 var sslCaCert = Environment.GetEnvironmentVariable("SSL_CA_CERT");
 if (!string.IsNullOrEmpty(sslCaCert))
@@ -144,6 +150,10 @@ builder.Services.AddHttpClient<ITwoFactorEmailService, TwoFactorEmailService>();
 
 // Add services to the container.
 builder.Services.AddSignalR();
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = long.MaxValue;
+});
 builder.Services.AddControllers();
 var app = builder.Build();
 

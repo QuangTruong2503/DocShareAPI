@@ -120,16 +120,53 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpGet("team")]
-        public IActionResult GetTeamLibrary([FromQuery] PaginationParams paginationParams)
+        public async Task<IActionResult> GetTeamLibrary([FromQuery] PaginationParams paginationParams, [FromQuery] string? search = null)
         {
-            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse)
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
+            var query = _context.FOLDERS
+                .AsNoTracking()
+                .Include(f => f.OwnerUser)
+                .Include(f => f.ChildFolders)
+                .Include(f => f.FolderDocuments)
+                    .ThenInclude(fd => fd.Document)
+                .Include(f => f.FolderMembers)
+                .Where(f =>
+                    f.deleted_at == null &&
+                    f.FolderMembers.Any() &&
+                    (f.owner_user_id == decodedToken.userID || f.FolderMembers.Any(m => m.user_id == decodedToken.userID)));
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var normalizedSearch = search.Trim();
+                query = query.Where(f => f.name.Contains(normalizedSearch));
+            }
+
+            var folders = await query.OrderByDescending(f => f.updated_at).ToListAsync();
+            var favoriteFolders = await _context.FAVORITES
+                .AsNoTracking()
+                .Where(f => f.user_id == decodedToken.userID && f.item_type == "folder")
+                .Select(f => f.item_id)
+                .ToListAsync();
+
+            var items = folders
+                .Select(f =>
+                {
+                    var role = f.owner_user_id == decodedToken.userID
+                        ? "owner"
+                        : NormalizeWorkspaceRole(f.FolderMembers.FirstOrDefault(m => m.user_id == decodedToken.userID)?.role);
+                    return ToFolderItem(f, role, isShared: true, favoriteFolders.Contains(f.folder_id));
+                })
+                .Cast<object>()
+                .ToList();
+
+            var pagedItems = PageItems(items, paginationParams);
             return Ok(new
             {
-                items = Array.Empty<object>(),
-                pagination = Pagination(1, paginationParams.PageSize, 0),
-                message = "Team library is not enabled"
+                items = pagedItems.items,
+                pagination = Pagination(pagedItems.currentPage, pagedItems.pageSize, items.Count),
+                counts = new { folders = items.Count, documents = 0, shared = items.Count }
             });
         }
 
