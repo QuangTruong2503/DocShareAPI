@@ -280,6 +280,176 @@ namespace DocShareAPI.Controllers
             });
         }
 
+        [HttpGet("/api/documents/{documentId:int}/insights")]
+        public async Task<IActionResult> GetDocumentInsights(int documentId, [FromQuery] int days = 30)
+        {
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
+                return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
+
+            var document = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Include(d => d.Users)
+                .FirstOrDefaultAsync(d => d.document_id == documentId && d.deleted_at == null);
+
+            if (document == null)
+                return NotFound(Error("DOCUMENT_NOT_FOUND", "Không tìm thấy tài liệu."));
+
+            if (!CanManageDocumentInsights(document, decodedToken))
+                return Forbid();
+
+            var normalizedDays = Math.Clamp(days, 1, 365);
+            var since = DateTime.UtcNow.Date.AddDays(-(normalizedDays - 1));
+            var today = DateTime.UtcNow.Date;
+
+            var totalViews = await _context.DOCUMENT_VIEWS.AsNoTracking().CountAsync(v => v.document_id == documentId);
+            var totalDownloads = await _context.DOCUMENT_DOWNLOADS.AsNoTracking().CountAsync(d => d.document_id == documentId);
+            var totalLikes = await _context.LIKES.AsNoTracking().CountAsync(l => l.document_id == documentId && l.reaction == 1);
+            var totalDislikes = await _context.LIKES.AsNoTracking().CountAsync(l => l.document_id == documentId && l.reaction == -1);
+            var totalComments = await _context.COMMENTS.AsNoTracking().CountAsync(c => c.document_id == documentId && c.deleted_at == null);
+            var totalShares = await _context.SHARE_LINKS.AsNoTracking().CountAsync(s => s.item_type == "document" && s.item_id == documentId);
+            var totalVersions = await _context.DOCUMENT_VERSIONS.AsNoTracking().CountAsync(v => v.document_id == documentId);
+
+            var dailyViewRows = await _context.DOCUMENT_VIEWS
+                .AsNoTracking()
+                .Where(v => v.document_id == documentId && v.viewed_at >= since)
+                .GroupBy(v => v.viewed_at.Date)
+                .Select(g => new { date = g.Key, count = g.Count() })
+                .ToListAsync();
+
+            var dailyDownloadRows = await _context.DOCUMENT_DOWNLOADS
+                .AsNoTracking()
+                .Where(d => d.document_id == documentId && d.downloaded_at >= since)
+                .GroupBy(d => d.downloaded_at.Date)
+                .Select(g => new { date = g.Key, count = g.Count() })
+                .ToListAsync();
+
+            var viewCounts = dailyViewRows.ToDictionary(x => DateOnly.FromDateTime(x.date), x => x.count);
+            var downloadCounts = dailyDownloadRows.ToDictionary(x => DateOnly.FromDateTime(x.date), x => x.count);
+            var daily = Enumerable.Range(0, normalizedDays)
+                .Select(offset =>
+                {
+                    var date = DateOnly.FromDateTime(today.AddDays(-(normalizedDays - 1 - offset)));
+                    return new
+                    {
+                        date = date.ToString("yyyy-MM-dd"),
+                        views = viewCounts.GetValueOrDefault(date),
+                        downloads = downloadCounts.GetValueOrDefault(date)
+                    };
+                })
+                .ToList();
+
+            var sources = await _context.DOCUMENT_VIEWS
+                .AsNoTracking()
+                .Where(v => v.document_id == documentId && v.viewed_at >= since)
+                .GroupBy(v => string.IsNullOrWhiteSpace(v.source) ? "unknown" : v.source!)
+                .Select(g => new { source = g.Key, count = g.Count() })
+                .OrderByDescending(x => x.count)
+                .Take(8)
+                .ToListAsync();
+
+            var shareLinks = await _context.SHARE_LINKS
+                .AsNoTracking()
+                .Where(s => s.item_type == "document" && s.item_id == documentId)
+                .OrderByDescending(s => s.created_at)
+                .Take(10)
+                .Select(s => new
+                {
+                    id = s.share_link_id,
+                    token = s.token,
+                    access = s.access,
+                    permission = s.permission,
+                    allowDownload = s.allow_download,
+                    viewCount = s.view_count,
+                    downloadCount = s.download_count,
+                    maxViews = s.max_views,
+                    maxDownloads = s.max_downloads,
+                    expiresAt = s.expires_at,
+                    revokedAt = s.revoked_at,
+                    createdAt = s.created_at,
+                    isActive = s.revoked_at == null && (s.expires_at == null || s.expires_at > DateTime.UtcNow)
+                })
+                .ToListAsync();
+
+            var recentViews = await _context.DOCUMENT_VIEWS
+                .AsNoTracking()
+                .Where(v => v.document_id == documentId)
+                .OrderByDescending(v => v.viewed_at)
+                .Take(8)
+                .Select(v => new
+                {
+                    type = "view",
+                    label = "Lượt xem",
+                    at = v.viewed_at,
+                    source = v.source
+                })
+                .ToListAsync();
+
+            var recentDownloads = await _context.DOCUMENT_DOWNLOADS
+                .AsNoTracking()
+                .Where(d => d.document_id == documentId)
+                .OrderByDescending(d => d.downloaded_at)
+                .Take(8)
+                .Select(d => new
+                {
+                    type = "download",
+                    label = "Lượt tải",
+                    at = d.downloaded_at,
+                    source = d.source
+                })
+                .ToListAsync();
+
+            var recentComments = await _context.COMMENTS
+                .AsNoTracking()
+                .Include(c => c.User)
+                .Where(c => c.document_id == documentId && c.deleted_at == null)
+                .OrderByDescending(c => c.created_at)
+                .Take(8)
+                .Select(c => new
+                {
+                    type = "comment",
+                    label = "Bình luận",
+                    at = c.created_at,
+                    source = c.User != null ? c.User.full_name : null
+                })
+                .ToListAsync();
+
+            var recentActivity = recentViews
+                .Concat(recentDownloads)
+                .Concat(recentComments)
+                .OrderByDescending(a => a.at)
+                .Take(12)
+                .ToList();
+
+            return Ok(new
+            {
+                success = true,
+                days = normalizedDays,
+                document = new
+                {
+                    id = document.document_id,
+                    title = document.Title,
+                    ownerId = document.user_id,
+                    ownerName = document.Users != null ? document.Users.full_name : null,
+                    uploadedAt = document.uploaded_at,
+                    isPublic = document.is_public
+                },
+                totals = new
+                {
+                    views = totalViews,
+                    downloads = totalDownloads,
+                    likes = totalLikes,
+                    dislikes = totalDislikes,
+                    comments = totalComments,
+                    shares = totalShares,
+                    versions = totalVersions
+                },
+                daily,
+                sources,
+                shareLinks,
+                recentActivity
+            });
+        }
+
         private async Task<bool> CanViewDocument(Documents document, DecodedTokenResponse? decodedToken)
         {
             if (document.is_public)
@@ -298,6 +468,12 @@ namespace DocShareAPI.Controllers
                 .FirstOrDefaultAsync();
 
             return folderId.HasValue && await _folderPermissionService.CanViewFolderAsync(decodedToken.userID, folderId.Value);
+        }
+
+        private static bool CanManageDocumentInsights(Documents document, DecodedTokenResponse decodedToken)
+        {
+            return document.user_id == decodedToken.userID ||
+                string.Equals(decodedToken.roleID, "admin", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string? HashValue(string? value)
