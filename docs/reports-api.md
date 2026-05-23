@@ -97,6 +97,46 @@ Duplicate active report response `409 Conflict`:
 }
 ```
 
+## GET `/api/reports/document/{documentId}/status`
+
+Kiểm tra user hiện tại có thể báo cáo tài liệu này không, đồng thời trả về report đang hoạt động nếu đã tồn tại.
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "documentId": 101,
+    "canReport": false,
+    "blockedReason": "HAS_ACTIVE_REPORT",
+    "hasActiveReport": true,
+    "activeReport": {
+      "report_id": 9,
+      "document_id": 101,
+      "reason": "Tài liệu này có nội dung vi phạm bản quyền.",
+      "status": "Chờ giải quyết",
+      "created_at": "2026-05-16T14:30:00Z"
+    },
+    "latestReport": {
+      "report_id": 9,
+      "document_id": 101,
+      "reason": "Tài liệu này có nội dung vi phạm bản quyền.",
+      "status": "Chờ giải quyết",
+      "created_at": "2026-05-16T14:30:00Z"
+    },
+    "document": {
+      "document_id": 101,
+      "title": "Nhập môn C#",
+      "thumbnail_url": "https://...",
+      "is_public": true
+    }
+  }
+}
+```
+
+`blockedReason`: `OWN_DOCUMENT`, `HAS_ACTIVE_REPORT`, hoặc `null`.
+
 ## GET `/api/reports/my`
 
 Danh sách báo cáo của user hiện tại.
@@ -185,10 +225,39 @@ Response:
 }
 ```
 
+## DELETE `/api/reports/my/{reportId}`
+
+Hủy báo cáo của user hiện tại. Chỉ hủy được khi report còn ở trạng thái `Chờ giải quyết`.
+
+Success response:
+
+```json
+{
+  "success": true,
+  "message": "Hủy báo cáo thành công.",
+  "deletedReportId": 9
+}
+```
+
+Conflict response `409 Conflict`:
+
+```json
+{
+  "success": false,
+  "message": "Chỉ có thể hủy báo cáo khi còn ở trạng thái Chờ giải quyết.",
+  "data": {
+    "report_id": 9,
+    "status": "Đang xử lý"
+  }
+}
+```
+
 ## FE Flow Gợi Ý
 
-1. Trang chi tiết tài liệu: gọi `GET /api/reports/options` để lấy lý do gợi ý.
-2. Khi user submit form: gọi `POST /api/reports`.
-3. Trang lịch sử báo cáo: gọi `GET /api/reports/my`.
-4. Trang chi tiết báo cáo: gọi `GET /api/reports/my/{reportId}`.
-5. Admin xử lý báo cáo: dùng `/api/admin/reports` trong `docs/admin-api.md`.
+1. Trang chi tiết tài liệu: gọi `GET /api/reports/document/{documentId}/status` để biết có bật nút report không.
+2. Khi mở form: gọi `GET /api/reports/options` để lấy lý do gợi ý.
+3. Khi user submit form: gọi `POST /api/reports`.
+4. Trang lịch sử báo cáo: gọi `GET /api/reports/my`.
+5. Trang chi tiết báo cáo: gọi `GET /api/reports/my/{reportId}`.
+6. Nếu report còn `Chờ giải quyết`, user có thể hủy bằng `DELETE /api/reports/my/{reportId}`.
+7. Admin xử lý báo cáo: dùng `/api/admin/reports` trong `docs/admin-api.md`.

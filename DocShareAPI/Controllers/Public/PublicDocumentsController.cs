@@ -5,6 +5,7 @@ using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace DocShareAPI.Controllers.Public
@@ -143,51 +144,120 @@ namespace DocShareAPI.Controllers.Public
 
         //Lấy tài liệu theo search
         [HttpGet("search-documents")]
-        public async Task<IActionResult> SearchDocuments([FromQuery] PaginationParams paginationParams, [FromQuery] string search)
+        public async Task<IActionResult> SearchDocuments(
+            [FromQuery] PaginationParams paginationParams,
+            [FromQuery] string search,
+            [FromQuery] string sortBy = "relevance")
         {
             if (string.IsNullOrWhiteSpace(search))
             {
                 return BadRequest(new { message = "Từ khóa tìm kiếm là bắt buộc." });
             }
 
-            var normalizedSearch = search.Trim().ToLower();
+            var normalizedSearch = NormalizeSearchInput(search);
+            var phrasePattern = ToContainsPattern(normalizedSearch);
+            var prefixPattern = ToPrefixPattern(normalizedSearch);
+            var terms = GetSearchTerms(normalizedSearch);
 
-            var query = from document in _context.DOCUMENTS
-                        join user in _context.USERS on document.user_id equals user.user_id
-                        join docCate in _context.DOCUMENT_CATEGORIES on document.document_id equals docCate.document_id into docCateGroup
-                        from docCate in docCateGroup.DefaultIfEmpty() // LEFT JOIN
+            var query = _context.DOCUMENTS
+                .AsNoTracking()
+                .Where(d => d.is_public && d.deleted_at == null);
 
-                        join category in _context.CATEGORIES on docCate.category_id equals category.category_id into categoryGroup
-                        from category in categoryGroup.DefaultIfEmpty() // LEFT JOIN
+            foreach (var term in terms)
+            {
+                var termPattern = ToContainsPattern(term);
+                query = query.Where(d =>
+                    EF.Functions.Like(d.Title.ToLower(), termPattern) ||
+                    (d.Description != null && EF.Functions.Like(d.Description.ToLower(), termPattern)) ||
+                    (d.Users != null && EF.Functions.Like(d.Users.Username.ToLower(), termPattern)) ||
+                    (d.Users != null && d.Users.full_name != null && EF.Functions.Like(d.Users.full_name.ToLower(), termPattern)) ||
+                    _context.DOCUMENT_CATEGORIES.Any(dc =>
+                        dc.document_id == d.document_id &&
+                        _context.CATEGORIES.Any(c =>
+                            c.category_id == dc.category_id &&
+                            (EF.Functions.Like(c.Name.ToLower(), termPattern) ||
+                             EF.Functions.Like(c.category_id.ToLower(), termPattern)))) ||
+                    _context.DOCUMENT_TAGS.Any(dt =>
+                        dt.document_id == d.document_id &&
+                        _context.TAGS.Any(t =>
+                            t.tag_id == dt.tag_id &&
+                            (EF.Functions.Like(t.Name.ToLower(), termPattern) ||
+                             EF.Functions.Like(t.tag_id.ToLower(), termPattern)))));
+            }
 
-                        join docTag in _context.DOCUMENT_TAGS on document.document_id equals docTag.document_id into docTagGroup
-                        from docTag in docTagGroup.DefaultIfEmpty() // LEFT JOIN
+            var scoredQuery = query.Select(d => new
+            {
+                d.document_id,
+                full_name = d.Users != null ? d.Users.full_name : null,
+                d.Title,
+                d.Description,
+                d.thumbnail_url,
+                d.is_public,
+                d.file_type,
+                d.download_count,
+                d.uploaded_at,
+                searchScore =
+                    (d.Title.ToLower() == normalizedSearch ? 1000 : 0) +
+                    (EF.Functions.Like(d.Title.ToLower(), prefixPattern) ? 700 : 0) +
+                    (EF.Functions.Like(d.Title.ToLower(), phrasePattern) ? 500 : 0) +
+                    (_context.DOCUMENT_CATEGORIES.Any(dc =>
+                        dc.document_id == d.document_id &&
+                        _context.CATEGORIES.Any(c =>
+                            c.category_id == dc.category_id &&
+                            EF.Functions.Like(c.Name.ToLower(), phrasePattern))) ? 300 : 0) +
+                    (_context.DOCUMENT_TAGS.Any(dt =>
+                        dt.document_id == d.document_id &&
+                        _context.TAGS.Any(t =>
+                            t.tag_id == dt.tag_id &&
+                            EF.Functions.Like(t.Name.ToLower(), phrasePattern))) ? 250 : 0) +
+                    (d.Description != null && EF.Functions.Like(d.Description.ToLower(), phrasePattern) ? 150 : 0) +
+                    (d.Users != null && d.Users.full_name != null && EF.Functions.Like(d.Users.full_name.ToLower(), phrasePattern) ? 100 : 0) +
+                    (d.Users != null && EF.Functions.Like(d.Users.Username.ToLower(), phrasePattern) ? 100 : 0)
+            });
 
-                        join tag in _context.TAGS on docTag.tag_id equals tag.tag_id into tagGroup
-                        from tag in tagGroup.DefaultIfEmpty() // LEFT JOIN
+            scoredQuery = sortBy.Trim().ToLowerInvariant() switch
+            {
+                "date" or "newest" => scoredQuery
+                    .OrderByDescending(d => d.uploaded_at)
+                    .ThenByDescending(d => d.searchScore),
+                "downloads" or "popular" => scoredQuery
+                    .OrderByDescending(d => d.download_count)
+                    .ThenByDescending(d => d.searchScore),
+                "title" => scoredQuery
+                    .OrderBy(d => d.Title)
+                    .ThenByDescending(d => d.searchScore),
+                _ => scoredQuery
+                    .OrderByDescending(d => d.searchScore)
+                    .ThenByDescending(d => d.download_count)
+                    .ThenByDescending(d => d.uploaded_at)
+            };
 
-                        select new { document, user, category, tag };
-
-            var documents = await query
-                .Where(q => q.document.is_public &&
-                    (q.document.Title.ToLower().Contains(normalizedSearch)
-                    || (q.category != null && q.category.Name.ToLower().Contains(normalizedSearch))
-                    || (q.tag != null && q.tag.Name.ToLower().Contains(normalizedSearch))
-                    || (q.document.Description != null && q.document.Description.ToLower().Contains(normalizedSearch))))
-                .Select(q => new
+            var documents = await scoredQuery
+                .Select(d => new
                 {
-                    q.document.document_id,
-                    q.user.full_name,
-                    q.document.Title,
-                    q.document.thumbnail_url,
-                    q.document.is_public,
+                    d.document_id,
+                    d.full_name,
+                    d.Title,
+                    d.Description,
+                    d.thumbnail_url,
+                    d.is_public,
+                    d.file_type,
+                    d.download_count,
+                    d.uploaded_at,
+                    d.searchScore
                 })
-                .Distinct()
-                .OrderBy(d => d.Title)
                 .ToPagedListAsync(paginationParams.PageNumber, paginationParams.PageSize);
+
             return Ok(new
             {
                 documents = documents,
+                search = new
+                {
+                    query = search,
+                    normalized = normalizedSearch,
+                    terms,
+                    sortBy
+                },
                 Pagination = new
                 {
                     documents.CurrentPage,
@@ -195,6 +265,32 @@ namespace DocShareAPI.Controllers.Public
                     documents.TotalPages
                 }
             });
+        }
+
+        private static string NormalizeSearchInput(string search)
+        {
+            return Regex.Replace(search.Trim(), @"\s+", " ").ToLowerInvariant();
+        }
+
+        private static IReadOnlyList<string> GetSearchTerms(string normalizedSearch)
+        {
+            return Regex.Matches(normalizedSearch, @"[\p{L}\p{N}]+")
+                .Select(match => match.Value)
+                .Where(term => term.Length > 1)
+                .Distinct()
+                .Take(8)
+                .DefaultIfEmpty(normalizedSearch)
+                .ToArray();
+        }
+
+        private static string ToContainsPattern(string value)
+        {
+            return $"%{value}%";
+        }
+
+        private static string ToPrefixPattern(string value)
+        {
+            return $"{value}%";
         }
         [HttpGet("documents-by-category")]
         public async Task<ActionResult> GetDocumentsByCategoryId(

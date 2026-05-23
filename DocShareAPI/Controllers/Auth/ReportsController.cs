@@ -22,6 +22,12 @@ namespace DocShareAPI.Controllers.Auth
             "Từ chối"
         };
 
+        private static readonly string[] ActiveReportStatuses =
+        {
+            "Chờ giải quyết",
+            "Đang xử lý"
+        };
+
         private static readonly string[] SuggestedReasons =
         {
             "Nội dung vi phạm bản quyền",
@@ -103,13 +109,12 @@ namespace DocShareAPI.Controllers.Auth
             if (isOwner)
                 return BadRequest(new { success = false, message = "Bạn không thể báo cáo tài liệu của chính mình." });
 
-            var activeStatuses = new[] { "Chờ giải quyết", "Đang xử lý" };
             var existingReport = await _context.REPORTS
                 .AsNoTracking()
                 .Where(r =>
                     r.user_id == decodedToken.userID &&
                     r.document_id == request.DocumentId &&
-                    activeStatuses.Contains(r.Status))
+                    ActiveReportStatuses.Contains(r.Status))
                 .Select(r => new
                 {
                     r.report_id,
@@ -203,6 +208,100 @@ namespace DocShareAPI.Controllers.Auth
                 success = true,
                 message = "Tạo báo cáo thành công.",
                 data = response
+            });
+        }
+
+        [HttpGet("document/{documentId:int}/status")]
+        public async Task<IActionResult> GetMyDocumentReportStatus(int documentId)
+        {
+            var decodedToken = GetDecodedToken();
+            if (decodedToken == null)
+                return Unauthorized(new { success = false, message = "Bạn cần đăng nhập." });
+
+            if (documentId <= 0)
+                return BadRequest(new { success = false, message = "ID tài liệu là bắt buộc." });
+
+            var document = await _context.DOCUMENTS
+                .AsNoTracking()
+                .Where(d => d.document_id == documentId)
+                .Select(d => new
+                {
+                    d.document_id,
+                    d.user_id,
+                    d.Title,
+                    d.thumbnail_url,
+                    d.is_public
+                })
+                .FirstOrDefaultAsync();
+
+            if (document == null)
+                return NotFound(new { success = false, message = "Không tìm thấy tài liệu." });
+
+            var isOwner = document.user_id == decodedToken.userID;
+            var isAdmin = string.Equals(decodedToken.roleID, "admin", StringComparison.OrdinalIgnoreCase);
+            var hasAccess = document.is_public || isOwner || isAdmin;
+
+            if (!hasAccess)
+                return Forbid();
+
+            var latestReport = await _context.REPORTS
+                .AsNoTracking()
+                .Where(r => r.user_id == decodedToken.userID && r.document_id == documentId)
+                .OrderByDescending(r => r.created_at)
+                .Select(r => new
+                {
+                    r.report_id,
+                    r.document_id,
+                    r.Reason,
+                    r.Status,
+                    r.created_at
+                })
+                .FirstOrDefaultAsync();
+
+            var activeReport = latestReport != null && ActiveReportStatuses.Contains(latestReport.Status)
+                ? latestReport
+                : await _context.REPORTS
+                    .AsNoTracking()
+                    .Where(r =>
+                        r.user_id == decodedToken.userID &&
+                        r.document_id == documentId &&
+                        ActiveReportStatuses.Contains(r.Status))
+                    .OrderByDescending(r => r.created_at)
+                    .Select(r => new
+                    {
+                        r.report_id,
+                        r.document_id,
+                        r.Reason,
+                        r.Status,
+                        r.created_at
+                    })
+                    .FirstOrDefaultAsync();
+
+            string? blockedReason = null;
+            if (isOwner)
+                blockedReason = "OWN_DOCUMENT";
+            else if (activeReport != null)
+                blockedReason = "HAS_ACTIVE_REPORT";
+
+            return Ok(new
+            {
+                success = true,
+                data = new
+                {
+                    documentId = document.document_id,
+                    canReport = !isOwner && activeReport == null,
+                    blockedReason,
+                    hasActiveReport = activeReport != null,
+                    activeReport,
+                    latestReport,
+                    document = new
+                    {
+                        document.document_id,
+                        document.Title,
+                        document.thumbnail_url,
+                        document.is_public
+                    }
+                }
             });
         }
 
@@ -300,6 +399,44 @@ namespace DocShareAPI.Controllers.Auth
                 return NotFound(new { success = false, message = "Không tìm thấy báo cáo." });
 
             return Ok(new { success = true, data = report });
+        }
+
+        [HttpDelete("my/{reportId:int}")]
+        public async Task<IActionResult> CancelMyReport(int reportId)
+        {
+            var decodedToken = GetDecodedToken();
+            if (decodedToken == null)
+                return Unauthorized(new { success = false, message = "Bạn cần đăng nhập." });
+
+            var report = await _context.REPORTS
+                .FirstOrDefaultAsync(r => r.report_id == reportId && r.user_id == decodedToken.userID);
+
+            if (report == null)
+                return NotFound(new { success = false, message = "Không tìm thấy báo cáo." });
+
+            if (report.Status != "Chờ giải quyết")
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "Chỉ có thể hủy báo cáo khi còn ở trạng thái Chờ giải quyết.",
+                    data = new
+                    {
+                        report.report_id,
+                        report.Status
+                    }
+                });
+            }
+
+            _context.REPORTS.Remove(report);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                success = true,
+                message = "Hủy báo cáo thành công.",
+                deletedReportId = reportId
+            });
         }
 
         private DecodedTokenResponse? GetDecodedToken()
