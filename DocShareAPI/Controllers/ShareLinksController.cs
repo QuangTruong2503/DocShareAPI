@@ -298,7 +298,7 @@ namespace DocShareAPI.Controllers
                     description = document.Description,
                     fileUrl = document.file_url,
                     previewUrl = document.file_url,
-                    downloadUrl = link.allow_download && string.IsNullOrEmpty(link.password_hash) ? $"/api/s/{link.token}/download" : null,
+                    downloadUrl = link.allow_download && string.IsNullOrEmpty(link.password_hash) ? BuildApiUrl($"/api/s/{link.token}/download") : null,
                     thumbnailUrl = document.thumbnail_url,
                     ownerId = document.user_id,
                     ownerName = document.Users?.full_name ?? document.Users?.Username,
@@ -352,7 +352,7 @@ namespace DocShareAPI.Controllers
 
         private async Task<object> ToResponse(ShareLinks link)
         {
-            var baseUrl = _configuration["PublicBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
+            var baseUrl = GetFrontendBaseUrl();
             return new
             {
                 id = link.token,
@@ -372,6 +372,25 @@ namespace DocShareAPI.Controllers
                 createdAt = link.created_at,
                 updatedAt = link.updated_at
             };
+        }
+
+        private string GetFrontendBaseUrl()
+        {
+            return (Environment.GetEnvironmentVariable("PUBLIC_BASE_URL")
+                    ?? _configuration["PublicBaseUrl"]
+                    ?? _configuration["DOMAIN"]
+                    ?? $"{Request.Scheme}://{Request.Host}")
+                .TrimEnd('/');
+        }
+
+        private string BuildApiUrl(string path)
+        {
+            var baseUrl = (Environment.GetEnvironmentVariable("API_BASE_URL")
+                    ?? _configuration["ApiBaseUrl"]
+                    ?? $"{Request.Scheme}://{Request.Host}")
+                .TrimEnd('/');
+
+            return $"{baseUrl}/{path.TrimStart('/')}";
         }
 
         private async Task<string?> GetItemName(ShareLinks link)

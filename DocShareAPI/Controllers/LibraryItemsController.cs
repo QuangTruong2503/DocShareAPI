@@ -2,8 +2,11 @@ using DocShareAPI.Data;
 using DocShareAPI.Helpers;
 using DocShareAPI.Models;
 using DocShareAPI.Services;
+using CloudinaryDotNet.Actions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace DocShareAPI.Controllers
 {
@@ -13,11 +16,13 @@ namespace DocShareAPI.Controllers
     {
         private readonly DocShareDbContext _context;
         private readonly IFolderPermissionService _permissionService;
+        private readonly ICloudinaryService _cloudinaryService;
 
-        public LibraryItemsController(DocShareDbContext context, IFolderPermissionService permissionService)
+        public LibraryItemsController(DocShareDbContext context, IFolderPermissionService permissionService, ICloudinaryService cloudinaryService)
         {
             _context = context;
             _permissionService = permissionService;
+            _cloudinaryService = cloudinaryService;
         }
 
         [HttpPatch("{itemId:int}/rename")]
@@ -174,6 +179,102 @@ namespace DocShareAPI.Controllers
             });
 
             return Ok(new { success = failed.Count == 0, copied, failed });
+        }
+
+        [HttpPost("download")]
+        public async Task<IActionResult> DownloadItems([FromBody] DownloadLibraryItemsRequest request)
+        {
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
+                return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
+
+            request ??= new DownloadLibraryItemsRequest();
+
+            var requestedPublicIds = (request.publicIds ?? new List<string>())
+                .Where(publicId => !string.IsNullOrWhiteSpace(publicId))
+                .Select(publicId => publicId.Trim())
+                .Distinct()
+                .ToList();
+
+            var requestedDocumentIds = (request.items ?? new List<LibraryItemRef>())
+                .Where(item => NormalizeType(item.type) == "document" && item.id > 0)
+                .Select(item => item.id)
+                .Distinct()
+                .ToList();
+
+            if (requestedPublicIds.Count == 0 && requestedDocumentIds.Count == 0)
+                return BadRequest(Error("INVALID_PAYLOAD", "Chọn ít nhất một tài liệu để tải xuống."));
+
+            var documents = await _context.DOCUMENTS
+                .Where(document =>
+                    document.deleted_at == null &&
+                    (requestedPublicIds.Contains(document.public_id) || requestedDocumentIds.Contains(document.document_id)))
+                .ToListAsync();
+
+            var downloadableDocuments = new List<Documents>();
+            var failures = new List<string>();
+            var requestedKeys = requestedPublicIds.Count > 0
+                ? requestedPublicIds
+                : requestedDocumentIds.Select(id => id.ToString()).ToList();
+
+            foreach (var requestedKey in requestedKeys)
+            {
+                var document = requestedPublicIds.Count > 0
+                    ? documents.FirstOrDefault(item => item.public_id == requestedKey)
+                    : documents.FirstOrDefault(item => item.document_id.ToString() == requestedKey);
+                if (document == null)
+                {
+                    failures.Add($"{requestedKey}: Không tìm thấy tài liệu.");
+                    continue;
+                }
+
+                if (!await CanCopyDocument(document, decodedToken))
+                {
+                    failures.Add($"{document.Title}: Không có quyền tải xuống.");
+                    continue;
+                }
+
+                downloadableDocuments.Add(document);
+            }
+
+            if (downloadableDocuments.Count == 0)
+                return Forbid();
+
+            var publicIds = downloadableDocuments
+                .Select(document => document.public_id)
+                .Where(publicId => !string.IsNullOrWhiteSpace(publicId))
+                .Distinct()
+                .ToList();
+
+            if (publicIds.Count == 0)
+                return BadRequest(Error("NO_CLOUDINARY_PUBLIC_IDS", "Các tài liệu được chọn chưa có public_id Cloudinary."));
+
+            foreach (var document in downloadableDocuments)
+            {
+                document.download_count++;
+                _context.DOCUMENT_DOWNLOADS.Add(new DocumentDownloads
+                {
+                    document_id = document.document_id,
+                    user_id = decodedToken.userID,
+                    source = "workspace_archive_download",
+                    ip_hash = HashValue(HttpContext.Connection.RemoteIpAddress?.ToString()),
+                    downloaded_at = DateTime.UtcNow
+                });
+            }
+
+            await _context.SaveChangesAsync();
+
+            var archiveParams = new ArchiveParams()
+                .Mode(ArchiveCallMode.Download)
+                .ResourceType("auto")
+                .Type("upload")
+                .PublicIds(publicIds)
+                .TargetFormat(ArchiveFormat.Zip)
+                .TargetPublicId($"docshare-download-{DateTime.UtcNow:yyyyMMdd-HHmmss}")
+                .FlattenFolders(true)
+                .UseOriginalFilename(true);
+
+            var downloadUrl = _cloudinaryService.Cloudinary.DownloadArchiveUrl(archiveParams);
+            return Ok(new { downloadUrl, failed = failures });
         }
 
         [HttpPost("/api/folders/merge")]
@@ -875,6 +976,14 @@ namespace DocShareAPI.Controllers
             return $"{baseName} (copy){extension}";
         }
 
+        private static string? HashValue(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+        }
+
         private async Task MoveFolder(int folderId, int? targetFolderId, DecodedTokenResponse decodedToken, List<object> moved, List<object> failed)
         {
             var folder = await _context.FOLDERS.FirstOrDefaultAsync(f => f.folder_id == folderId && f.deleted_at == null);
@@ -966,6 +1075,12 @@ namespace DocShareAPI.Controllers
         public List<LibraryItemRef>? items { get; set; }
         public int? targetFolderId { get; set; }
         public string? conflictStrategy { get; set; }
+    }
+
+    public class DownloadLibraryItemsRequest
+    {
+        public List<string>? publicIds { get; set; }
+        public List<LibraryItemRef>? items { get; set; }
     }
 
     public class MergeFolderRequest

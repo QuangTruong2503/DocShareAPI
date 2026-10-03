@@ -8,6 +8,7 @@ namespace DocShareAPI.Services
 {
     public class TokenServices
     {
+        public static readonly TimeSpan AccessTokenLifetime = TimeSpan.FromDays(3);
         private readonly string _secretKey;
         public TokenServices(string secretKey)
         {
@@ -26,7 +27,7 @@ namespace DocShareAPI.Services
 
             var token = new JwtSecurityToken(
                 claims: claims,
-                expires: DateTime.Now.AddDays(3),
+                expires: DateTime.UtcNow.Add(AccessTokenLifetime),
                 issuer: "DocShare",
                 signingCredentials: creds);
 

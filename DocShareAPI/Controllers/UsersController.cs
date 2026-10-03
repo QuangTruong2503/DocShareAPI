@@ -159,6 +159,7 @@ namespace DocShareAPI.Controllers
                 // ===== ĐĂNG NHẬP BÌNH THƯỜNG (KHÔNG CÓ 2FA) =====
                 var token = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
                 var hashedToken = TokenHasher.HashToken(token);
+                var tokenExpiresAt = DateTime.UtcNow.Add(TokenServices.AccessTokenLifetime);
 
                 var tokenEntity = new Tokens
                 {
@@ -166,7 +167,7 @@ namespace DocShareAPI.Controllers
                     user_id = user.user_id,
                     token = hashedToken,
                     type = TokenType.Access,
-                    expires_at = DateTime.UtcNow.AddDays(3),
+                    expires_at = tokenExpiresAt,
                     is_active = true,
                     created_at = DateTime.UtcNow,
                 };
@@ -193,6 +194,8 @@ namespace DocShareAPI.Controllers
                     success = true,
                     isLogin = true,
                     token,
+                    expiresAt = tokenExpiresAt,
+                    expiresIn = (int)TokenServices.AccessTokenLifetime.TotalSeconds,
                     user = BuildUserResponse(user)
                 });
             }
@@ -268,6 +271,7 @@ namespace DocShareAPI.Controllers
 
                 var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
                 var hashedAccessToken = TokenHasher.HashToken(accessToken);
+                var tokenExpiresAt = DateTime.UtcNow.Add(TokenServices.AccessTokenLifetime);
 
                 var accessTokenEntity = new Tokens
                 {
@@ -275,7 +279,7 @@ namespace DocShareAPI.Controllers
                     user_id = user.user_id,
                     token = hashedAccessToken,
                     type = TokenType.Access,
-                    expires_at = DateTime.UtcNow.AddDays(3),
+                    expires_at = tokenExpiresAt,
                     is_active = true,
                     created_at = DateTime.UtcNow
                 };
@@ -292,6 +296,8 @@ namespace DocShareAPI.Controllers
                     success = true,
                     isLogin = true,
                     token = accessToken,
+                    expiresAt = tokenExpiresAt,
+                    expiresIn = (int)TokenServices.AccessTokenLifetime.TotalSeconds,
                     user = BuildUserResponse(user)
                 });
             }
@@ -677,13 +683,14 @@ namespace DocShareAPI.Controllers
 
             var accessToken = _tokenServices.GenerateToken(user.user_id.ToString(), user.Role);
             var hashedToken = TokenHasher.HashToken(accessToken);
+            var tokenExpiresAt = DateTime.UtcNow.Add(TokenServices.AccessTokenLifetime);
             var tokenEntity = new Tokens
             {
                 token_id = Guid.NewGuid(),
                 user_id = user.user_id,
                 token = hashedToken,
                 type = TokenType.Access,
-                expires_at = DateTime.UtcNow.AddDays(3),
+                expires_at = tokenExpiresAt,
                 is_active = true,
                 created_at = DateTime.UtcNow,
                 user_device = request.userDevice
@@ -698,6 +705,8 @@ namespace DocShareAPI.Controllers
                 message = "Đăng nhập Google thành công",
                 isLogin = true,
                 token = accessToken,
+                expiresAt = tokenExpiresAt,
+                expiresIn = (int)TokenServices.AccessTokenLifetime.TotalSeconds,
                 user = BuildUserResponse(user)
             });
         }

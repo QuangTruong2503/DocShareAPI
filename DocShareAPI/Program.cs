@@ -101,6 +101,9 @@ var secretKey = Environment.GetEnvironmentVariable("JWT_SECRET_KEY")
     ?? builder.Configuration["TokenSecretKey"]
     ?? throw new InvalidOperationException("JWT SecretKey is not configured.");
 
+if (Encoding.UTF8.GetByteCount(secretKey) < 32)
+    throw new InvalidOperationException("JWT signing key must contain at least 32 bytes.");
+
 // Đăng ký TokenServices với secretKey
 builder.Services.AddScoped<TokenServices>(_ => new TokenServices(secretKey));
 builder.Services.AddScoped<INotificationService, NotificationService>();

@@ -469,6 +469,8 @@ namespace DocShareAPI.Controllers
                 extension,
                 size = document.file_size,
                 thumbnailUrl = document.thumbnail_url,
+                fileUrl = document.file_url,
+                publicId = document.public_id,
                 previewUrl = $"/api/documents/{document.document_id}/preview",
                 downloadUrl = $"/api/documents/{document.document_id}/download",
                 status = "ready",

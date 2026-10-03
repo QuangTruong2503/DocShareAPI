@@ -21,7 +21,8 @@ public class TokenValidationMiddleware
         "/api/users/public/",
         "/api/verification/public/",
         "/api/tags/public/",
-        "/api/public/"
+        "/api/public/",
+        "/api/s/"
     };
 
     public TokenValidationMiddleware(
@@ -126,6 +127,23 @@ public class TokenValidationMiddleware
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsync("Bạn cần đăng nhập.");
             return;
+        }
+
+        // Admin authorization must use the current database role, never a frontend cookie.
+        if (context.Request.Path.StartsWithSegments("/api/admin") && decodedToken != null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<DocShareDbContext>();
+            var role = await dbContext.USERS.AsNoTracking()
+                .Where(u => u.user_id == decodedToken.userID)
+                .Select(u => u.Role)
+                .FirstOrDefaultAsync();
+            if (!string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new { message = "Bạn không có quyền quản trị." });
+                return;
+            }
         }
 
         // 🔹 4. Cho request đi tiếp

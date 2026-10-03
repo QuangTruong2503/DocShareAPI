@@ -1047,6 +1047,7 @@ namespace DocShareAPI.Controllers.Auth
         }
 
         [HttpGet("download-document/{documentID}")]
+        [HttpGet("{documentID:int}/download")]
         public async Task<ActionResult> DownloadDocument(int documentID)
         {
             var decodedTokenResponse = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
@@ -1068,15 +1069,13 @@ namespace DocShareAPI.Controllers.Auth
                     return Forbid();
                 }
 
-                var result = await _cloudinaryService.Cloudinary.GetResourceByAssetIdAsync(document.asset_id);
-                if (result == null || string.IsNullOrEmpty(result.SecureUrl))
+                if (string.IsNullOrWhiteSpace(document.file_url))
                 {
                     return NotFound("Tài liệu không tồn tại.");
                 }
 
-                var fileBytes = await _httpClient.GetByteArrayAsync(result.SecureUrl);
-                var fileName = document.Title;
-                var contentType = "application/pdf"; // Hoặc loại MIME phù hợp với tài liệu của bạn
+                var fileName = BuildDownloadFileName(document.Title, document.file_url);
+                var downloadUrl = BuildCloudinaryAttachmentUrl(document.file_url, fileName);
                 // Cập nhật số lượt tải xuống
                 document.download_count++;
                 _context.DOCUMENT_DOWNLOADS.Add(new DocumentDownloads
@@ -1102,7 +1101,7 @@ namespace DocShareAPI.Controllers.Auth
                         metadata: new { download_count = document.download_count });
                 }
 
-                return File(fileBytes, contentType, fileName);
+                return Redirect(downloadUrl);
             }
             catch (Exception ex)
             {
@@ -1204,6 +1203,68 @@ namespace DocShareAPI.Controllers.Auth
         private async Task<Documents> CreateDocumentRecord(IFormFile file, Guid userId, ImageUploadResult uploadResult)
         {
             return await CreateDocumentRecord(file.FileName, file.Length, userId, uploadResult);
+        }
+
+        private static string BuildDownloadFileName(string title, string fileUrl)
+        {
+            var fileName = string.IsNullOrWhiteSpace(title) ? "document" : title.Trim();
+            if (!string.IsNullOrWhiteSpace(Path.GetExtension(fileName)))
+                return fileName;
+
+            if (Uri.TryCreate(fileUrl, UriKind.Absolute, out var uri))
+            {
+                var extension = Path.GetExtension(uri.AbsolutePath);
+                if (!string.IsNullOrWhiteSpace(extension))
+                    return $"{fileName}{extension}";
+            }
+
+            return fileName;
+        }
+
+        private static string BuildCloudinaryAttachmentUrl(string secureUrl, string fileName)
+        {
+            const string uploadMarker = "/upload/";
+            var uploadIndex = secureUrl.IndexOf(uploadMarker, StringComparison.OrdinalIgnoreCase);
+            if (uploadIndex < 0)
+                return secureUrl;
+
+            var safeFileName = SanitizeCloudinaryAttachmentName(fileName);
+            return secureUrl.Insert(uploadIndex + uploadMarker.Length, $"fl_attachment:{safeFileName}/");
+        }
+
+        private static string SanitizeCloudinaryAttachmentName(string fileName)
+        {
+            var safeName = Regex.Replace(fileName.Normalize(NormalizationForm.FormD), @"\p{Mn}", "");
+            safeName = Regex.Replace(safeName, @"[^a-zA-Z0-9._-]+", "_").Trim('_');
+            return string.IsNullOrWhiteSpace(safeName) ? "document" : safeName[..Math.Min(safeName.Length, 120)];
+        }
+
+        private static string ToDownloadContentType(string? fileType, string fileName)
+        {
+            var normalized = fileType?.Trim().ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(normalized) && normalized.Contains('/'))
+                return normalized;
+
+            var extension = normalized?.TrimStart('.');
+            if (string.IsNullOrWhiteSpace(extension))
+                extension = Path.GetExtension(fileName).TrimStart('.').ToLowerInvariant();
+
+            return extension switch
+            {
+                "pdf" => "application/pdf",
+                "doc" => "application/msword",
+                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "xls" => "application/vnd.ms-excel",
+                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "ppt" => "application/vnd.ms-powerpoint",
+                "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "txt" => "text/plain",
+                "csv" => "text/csv",
+                "jpg" or "jpeg" => "image/jpeg",
+                "png" => "image/png",
+                "gif" => "image/gif",
+                _ => "application/octet-stream"
+            };
         }
 
         private async Task<Documents> CreateDocumentRecord(string fileName, long fileLength, Guid userId, ImageUploadResult uploadResult)
@@ -1367,6 +1428,8 @@ namespace DocShareAPI.Controllers.Auth
                 extension,
                 size = document.file_size,
                 thumbnailUrl = document.thumbnail_url,
+                fileUrl = document.file_url,
+                publicId = document.public_id,
                 previewUrl = $"/api/documents/{document.document_id}/preview",
                 downloadUrl = $"/api/documents/{document.document_id}/download",
                 status = "ready",
