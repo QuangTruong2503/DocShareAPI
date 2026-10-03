@@ -40,7 +40,7 @@ namespace DocShareAPI.Controllers
             var trash = await folders.CountAsync(f => f.owner_user_id == userId && f.deleted_at != null && f.deleted_root_type == "folder" && f.deleted_root_id == f.folder_id)
                 + await documents.CountAsync(d => (d.user_id == userId || token.roleID == "admin") && d.deleted_at != null && d.deleted_root_type == "document" && d.deleted_root_id == d.document_id);
             var sharedLinks = await _context.SHARE_LINKS.CountAsync(link => link.owner_user_id == userId && link.revoked_at == null);
-            var usedBytes = await documents.Where(d => d.user_id == userId && d.deleted_at == null).SumAsync(d => (long)d.file_size);
+            var usedBytes = await StorageAccounting.UsedAsync(_context, userId);
             var limitBytes = await _context.USERS.Where(u => u.user_id == userId).Select(u => u.storage_limit_bytes).FirstOrDefaultAsync() ?? DefaultStorageLimitBytes;
             return Ok(new { counts = new { my = myFolders + myDocuments, shared, team, favorites, trash, sharedLinks }, storage = new { usedBytes, limitBytes } });
         }
@@ -308,10 +308,7 @@ namespace DocShareAPI.Controllers
                 folderRootArea = "team";
             var pagedItems = PageItems(libraryItems.items, paginationParams);
 
-            var usedBytes = await _context.DOCUMENTS
-                .AsNoTracking()
-                .Where(d => d.user_id == userId && d.deleted_at == null)
-                .SumAsync(d => (long)d.file_size);
+            var usedBytes = await StorageAccounting.UsedAsync(_context, userId);
             var limitBytes = await _context.USERS
                 .AsNoTracking()
                 .Where(u => u.user_id == userId)

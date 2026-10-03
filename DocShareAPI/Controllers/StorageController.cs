@@ -59,10 +59,7 @@ namespace DocShareAPI.Controllers
                 .Select(u => u.storage_limit_bytes)
                 .FirstOrDefaultAsync() ?? DefaultStorageLimitBytes;
 
-            var used = await _context.DOCUMENTS
-                .AsNoTracking()
-                .Where(d => d.user_id == userId && d.deleted_at == null)
-                .SumAsync(d => (long)d.file_size);
+            var used = await StorageAccounting.UsedAsync(_context, userId);
 
             return new
             {

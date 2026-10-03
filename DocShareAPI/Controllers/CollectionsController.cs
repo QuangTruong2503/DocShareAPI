@@ -189,7 +189,7 @@ namespace DocShareAPI.Controllers
 
             var documents = await _context.COLLECTION_DOCUMENTS
                 .AsNoTracking()
-                .Where(cd => cd.collection_id == id)
+                .Where(cd => cd.collection_id == id && cd.Documents!.deleted_at == null && (cd.Documents.is_public || cd.Documents.user_id == decodedToken.userID || decodedToken.roleID == "admin"))
                 .OrderByDescending(cd => cd.added_at)
                 .Select(cd => new
                 {
@@ -246,7 +246,7 @@ namespace DocShareAPI.Controllers
 
             var document = await _context.DOCUMENTS
                 .AsNoTracking()
-                .Where(d => d.document_id == request.document_id)
+                .Where(d => d.document_id == request.document_id && d.deleted_at == null)
                 .Select(d => new
                 {
                     d.document_id,

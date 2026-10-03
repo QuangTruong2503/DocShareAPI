@@ -263,17 +263,8 @@ namespace DocShareAPI.Controllers
 
             await _context.SaveChangesAsync();
 
-            var archiveParams = new ArchiveParams()
-                .Mode(ArchiveCallMode.Download)
-                .ResourceType("auto")
-                .Type("upload")
-                .PublicIds(publicIds)
-                .TargetFormat(ArchiveFormat.Zip)
-                .TargetPublicId($"docshare-download-{DateTime.UtcNow:yyyyMMdd-HHmmss}")
-                .FlattenFolders(true)
-                .UseOriginalFilename(true);
-
-            var downloadUrl = _cloudinaryService.Cloudinary.DownloadArchiveUrl(archiveParams);
+            if (downloadableDocuments.Count > 100) return BadRequest(Error("ARCHIVE_LIMIT", "Mỗi lần tải tối đa 100 tài liệu."));
+            var downloadUrl = HttpContext.RequestServices.GetRequiredService<AssetDelivery>().Issue(HttpContext, 0, archiveIds: downloadableDocuments.Select(d => d.document_id).ToArray());
             return Ok(new { downloadUrl, failed = failures });
         }
 
@@ -668,6 +659,14 @@ namespace DocShareAPI.Controllers
             if (ids.Count == 0)
                 return;
 
+            await AssetCleanup.QueueDocuments(_context, ids);
+            await _context.DOCUMENT_VERSIONS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.COMMENTS.Where(c => ids.Contains(c.document_id)).ExecuteUpdateAsync(set => set.SetProperty(c => c.parent_comment_id, (int?)null));
+            await _context.COMMENTS.Where(c => ids.Contains(c.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_VIEWS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_DOWNLOADS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.SHARE_LINKS.Where(s => s.item_type == "document" && ids.Contains(s.item_id)).ExecuteDeleteAsync();
+            await _context.FAVORITES.Where(f => f.item_type == "document" && ids.Contains(f.item_id)).ExecuteDeleteAsync();
             await _context.FOLDER_DOCUMENTS.Where(fd => ids.Contains(fd.document_id)).ExecuteDeleteAsync();
             await _context.COLLECTION_DOCUMENTS.Where(cd => ids.Contains(cd.document_id)).ExecuteDeleteAsync();
             await _context.DOCUMENT_TAGS.Where(dt => ids.Contains(dt.document_id)).ExecuteDeleteAsync();
@@ -675,6 +674,7 @@ namespace DocShareAPI.Controllers
             await _context.LIKES.Where(l => ids.Contains(l.document_id)).ExecuteDeleteAsync();
             await _context.REPORTS.Where(r => ids.Contains(r.document_id)).ExecuteDeleteAsync();
             await _context.NOTIFICATIONS.Where(n => n.related_document_id.HasValue && ids.Contains(n.related_document_id.Value)).ExecuteUpdateAsync(s => s.SetProperty(n => n.related_document_id, (int?)null));
+            DocumentDependencyTracking.Detach(_context, ids);
         }
 
         private async Task<List<int>> GetFolderSubtreeIds(int rootFolderId)
@@ -704,18 +704,7 @@ namespace DocShareAPI.Controllers
 
         private async Task MoveDocumentLink(int documentId, int? parentFolderId, Guid actorUserId)
         {
-            var link = await _context.FOLDER_DOCUMENTS.FirstOrDefaultAsync(fd => fd.document_id == documentId);
-            if (parentFolderId.HasValue)
-            {
-                if (link == null)
-                    _context.FOLDER_DOCUMENTS.Add(new FolderDocuments { document_id = documentId, folder_id = parentFolderId.Value, added_by_user_id = actorUserId, added_at = DateTime.UtcNow });
-                else
-                    link.folder_id = parentFolderId.Value;
-            }
-            else if (link != null)
-            {
-                _context.FOLDER_DOCUMENTS.Remove(link);
-            }
+            await DocumentFolderLinks.MoveAsync(_context, documentId, parentFolderId, actorUserId);
         }
 
         private async Task<int?> GetDocumentParentFolderId(int documentId)
@@ -824,18 +813,7 @@ namespace DocShareAPI.Controllers
                 return;
             }
 
-            var link = await _context.FOLDER_DOCUMENTS.FirstOrDefaultAsync(fd => fd.document_id == documentId);
-            if (targetFolderId.HasValue)
-            {
-                if (link == null)
-                    _context.FOLDER_DOCUMENTS.Add(new FolderDocuments { document_id = documentId, folder_id = targetFolderId.Value, added_by_user_id = decodedToken.userID, added_at = DateTime.UtcNow });
-                else
-                    link.folder_id = targetFolderId.Value;
-            }
-            else if (link != null)
-            {
-                _context.FOLDER_DOCUMENTS.Remove(link);
-            }
+            await DocumentFolderLinks.MoveAsync(_context, documentId, targetFolderId, decodedToken.userID);
 
             moved.Add(new { id = documentId, type = "document", parentFolderId = targetFolderId });
         }
@@ -859,6 +837,9 @@ namespace DocShareAPI.Controllers
                 return;
             }
 
+            var usedBytes = await StorageAccounting.UsedAsync(_context, decodedToken.userID);
+            var limit = await _context.USERS.Where(u => u.user_id == decodedToken.userID).Select(u => u.storage_limit_bytes).FirstOrDefaultAsync() ?? 10L * 1024 * 1024 * 1024;
+            if (usedBytes + source.file_size > limit) { failed.Add(new { id = documentId, type = "document", code = "STORAGE_QUOTA_EXCEEDED", message = "Không đủ dung lượng để sao chép tài liệu." }); return; }
             var newDocumentId = await GenerateUniqueDocumentId();
             var copiedTitle = await UniqueDocumentName(decodedToken.userID, targetFolderId, BuildCopyName(source.Title), newDocumentId);
             var newDocument = new Documents

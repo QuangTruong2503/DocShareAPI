@@ -37,15 +37,15 @@ namespace DocShareAPI.Controllers
             var last30Days = now.AddDays(-30);
 
             var totalUsers = await _context.USERS.CountAsync();
-            var totalDocuments = await _context.DOCUMENTS.CountAsync();
-            var totalPublicDocuments = await _context.DOCUMENTS.CountAsync(d => d.is_public);
+            var totalDocuments = await _context.DOCUMENTS.CountAsync(d => d.deleted_at == null);
+            var totalPublicDocuments = await _context.DOCUMENTS.CountAsync(d => d.is_public && d.deleted_at == null);
             var totalPrivateDocuments = totalDocuments - totalPublicDocuments;
             var totalReports = await _context.REPORTS.CountAsync();
             var pendingReports = await _context.REPORTS.CountAsync(r => r.Status == "Chờ giải quyết");
             var totalDownloads = await _context.DOCUMENTS.SumAsync(d => (int?)d.download_count) ?? 0;
             var totalCollections = await _context.COLLECTIONS.CountAsync();
 
-            var recentDocuments = await _context.DOCUMENTS
+            var recentDocuments = await _context.DOCUMENTS.Where(d => d.deleted_at == null)
                 .AsNoTracking()
                 .OrderByDescending(d => d.uploaded_at)
                 .Take(5)
@@ -178,6 +178,7 @@ namespace DocShareAPI.Controllers
                     u.is_verified,
                     u.two_factor_enabled,
                     u.storage_limit_bytes,
+                    storage_used_bytes = (_context.DOCUMENTS.Where(d => d.user_id == u.user_id).Sum(d => (long?)d.file_size) ?? 0) + (_context.DOCUMENT_VERSIONS.Where(v => v.Document!.user_id == u.user_id && v.asset_id != v.Document.asset_id).Select(v => new { v.document_id, v.asset_id, v.file_size }).Distinct().Sum(v => (long?)v.file_size) ?? 0),
                     document_count = u.Documents == null ? 0 : u.Documents.Count,
                     collection_count = u.Collections == null ? 0 : u.Collections.Count,
                     follower_count = u.Followers == null ? 0 : u.Followers.Count,
@@ -275,11 +276,24 @@ namespace DocShareAPI.Controllers
                 if (user.user_id == adminToken!.userID && role != "admin")
                     return BadRequest(new { success = false, message = "Quản trị viên không thể tự gỡ quyền admin của chính mình." });
 
+                if (user.Role == "admin" && role != "admin" && await _context.USERS.CountAsync(u => u.Role == "admin") <= 1)
+                    return BadRequest(new { success = false, message = "Không thể gỡ quản trị viên cuối cùng." });
+
                 if (user.Role != role)
                 {
                     user.Role = role;
+                    var sessions = await _context.TOKENS.Where(t => t.user_id == userId && t.is_active).ToListAsync();
+                    foreach (var session in sessions) session.is_active = false;
                     changes.Add("role");
                 }
+            }
+
+            if (request.AvatarUrl.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+            {
+                if (request.AvatarUrl.ValueKind is not (System.Text.Json.JsonValueKind.Null or System.Text.Json.JsonValueKind.String))
+                    return BadRequest(new { message = "Ảnh đại diện phải là URL hoặc null." });
+                user.avatar_url = request.AvatarUrl.ValueKind == System.Text.Json.JsonValueKind.Null ? null : request.AvatarUrl.GetString();
+                changes.Add("avatar_url");
             }
 
             if (request.FullName != null)
@@ -310,6 +324,7 @@ namespace DocShareAPI.Controllers
                 }
             }
 
+            AddAudit(adminToken!.userID, "user.updated", "user", userId.ToString(), new { changes });
             await _context.SaveChangesAsync();
 
             if (changes.Count > 0 && userId != adminToken!.userID)
@@ -355,11 +370,22 @@ namespace DocShareAPI.Controllers
             if (user == null)
                 return NotFound(new { success = false, message = "Không tìm thấy người dùng." });
 
+            if (user.Role == "admin" && await _context.USERS.CountAsync(u => u.Role == "admin") <= 1)
+                return BadRequest(new { message = "Không thể xóa quản trị viên cuối cùng." });
+            if (await _context.FOLDERS.AnyAsync(f => f.owner_user_id == userId) || await _context.FOLDER_MEMBERS.AnyAsync(m => m.user_id == userId))
+                return Conflict(new { message = "Hãy chuyển quyền sở hữu thư mục và gỡ thành viên trước khi xóa tài khoản." });
+            if (await _context.DOCUMENT_VERSIONS.AnyAsync(v => v.uploaded_by == userId && v.Document!.user_id != userId))
+                return Conflict(new { message = "Tài khoản còn đứng tên phiên bản của tài liệu người khác. Hãy chuyển tác giả phiên bản trước khi xóa." });
+            return await _context.Database.CreateExecutionStrategy().ExecuteAsync<IActionResult>(async () =>
+            {
+            await using var deleteTransaction = await _context.Database.BeginTransactionAsync();
+
             var userDocumentIds = await _context.DOCUMENTS
                 .Where(d => d.user_id == userId)
                 .Select(d => d.document_id)
                 .ToListAsync();
 
+            await AssetCleanup.QueueDocuments(_context, userDocumentIds);
             await DeleteDocumentRelations(userDocumentIds);
 
             var userCollectionIds = await _context.COLLECTIONS
@@ -389,14 +415,19 @@ namespace DocShareAPI.Controllers
                 .Where(d => d.user_id == userId)
                 .ExecuteDeleteAsync();
 
+            AddAudit(adminToken.userID, "user.deleted", "user", userId.ToString(), new { documents = userDocumentIds.Count });
+            foreach (var entry in _context.ChangeTracker.Entries().ToArray())
+                if (!ReferenceEquals(entry.Entity, user) && entry.State != EntityState.Added) entry.State = EntityState.Detached;
             _context.USERS.Remove(user);
             await _context.SaveChangesAsync();
+            await deleteTransaction.CommitAsync();
 
             return Ok(new
             {
                 success = true,
                 message = "Xóa người dùng thành công.",
                 deletedUserId = userId
+            });
             });
         }
 
@@ -408,13 +439,14 @@ namespace DocShareAPI.Controllers
             [FromQuery] bool? isPublic,
             [FromQuery] string? categoryId,
             [FromQuery] string? tagId,
+            [FromQuery] bool? hasReports = null,
             [FromQuery] string sortBy = "uploaded_at",
             [FromQuery] string sortDirection = "desc")
         {
             if (!TryRequireAdmin(out var error))
                 return error!;
 
-            var query = _context.DOCUMENTS.AsNoTracking();
+            var query = _context.DOCUMENTS.AsNoTracking().Where(d => d.deleted_at == null);
 
             if (!string.IsNullOrWhiteSpace(search))
             {
@@ -438,6 +470,7 @@ namespace DocShareAPI.Controllers
             if (!string.IsNullOrWhiteSpace(tagId))
                 query = query.Where(d => d.DocumentTags != null && d.DocumentTags.Any(dt => dt.tag_id == tagId));
 
+            if (hasReports.HasValue) query = query.Where(d => _context.REPORTS.Any(r => r.document_id == d.document_id) == hasReports.Value);
             query = ApplyDocumentSort(query, sortBy, sortDirection);
 
             var documents = await query
@@ -728,26 +761,15 @@ namespace DocShareAPI.Controllers
             var ownerId = document.user_id;
             var documentTitle = document.Title;
 
-            await DeleteDocumentRelations(new[] { documentId });
-
-            if (!string.IsNullOrWhiteSpace(document.public_id))
+            return await _context.Database.CreateExecutionStrategy().ExecuteAsync<IActionResult>(async () =>
             {
-                try
-                {
-                    await _cloudinaryService.Cloudinary.DeleteResourcesAsync(new DelResParams
-                    {
-                        PublicIds = new List<string> { document.public_id },
-                        Type = "upload"
-                    });
-                }
-                catch
-                {
-                    // Keep admin moderation usable even if remote asset cleanup fails.
-                }
-            }
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            await AssetCleanup.QueueDocuments(_context, new[] { documentId });
+            await DeleteDocumentRelations(new[] { documentId });
 
             _context.DOCUMENTS.Remove(document);
             await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
 
             if (ownerId != adminToken!.userID)
             {
@@ -765,6 +787,7 @@ namespace DocShareAPI.Controllers
                 success = true,
                 message = "Xóa tài liệu thành công.",
                 deletedDocumentId = documentId
+            });
             });
         }
 
@@ -794,6 +817,7 @@ namespace DocShareAPI.Controllers
                     c.Name,
                     c.Description,
                     c.parent_id,
+                    parent_name = _context.CATEGORIES.Where(parent => parent.category_id == c.parent_id).Select(parent => parent.Name).FirstOrDefault(),
                     document_count = c.DocumentCategories.Count,
                     child_count = _context.CATEGORIES.Count(child => child.parent_id == c.category_id)
                 })
@@ -876,6 +900,13 @@ namespace DocShareAPI.Controllers
                 if (parentId != null && !await _context.CATEGORIES.AnyAsync(c => c.category_id == parentId))
                     return BadRequest(new { success = false, message = "Danh mục cha không tồn tại." });
 
+                var visited = new HashSet<string>();
+                var ancestor = parentId;
+                while (ancestor != null)
+                {
+                    if (ancestor == categoryId || !visited.Add(ancestor)) return BadRequest(new { message = "Chuyên mục cha tạo vòng lặp." });
+                    ancestor = await _context.CATEGORIES.Where(c => c.category_id == ancestor).Select(c => c.parent_id).FirstOrDefaultAsync();
+                }
                 category.parent_id = parentId;
             }
 
@@ -899,9 +930,9 @@ namespace DocShareAPI.Controllers
             if (category == null)
                 return NotFound(new { success = false, message = "Không tìm thấy danh mục." });
 
-            await _context.DOCUMENT_CATEGORIES
-                .Where(dc => dc.category_id == categoryId)
-                .ExecuteDeleteAsync();
+            var documentCount = await _context.DOCUMENT_CATEGORIES.CountAsync(dc => dc.category_id == categoryId);
+            var childCount = await _context.CATEGORIES.CountAsync(c => c.parent_id == categoryId);
+            if (documentCount > 0 || childCount > 0) return Conflict(new { message = "Chuyên mục còn tài liệu hoặc chuyên mục con. Hãy chuyển chúng trước khi xóa.", documentCount, childCount });
 
             var children = await _context.CATEGORIES
                 .Where(c => c.parent_id == categoryId)
@@ -1017,9 +1048,8 @@ namespace DocShareAPI.Controllers
             if (tag == null)
                 return NotFound(new { success = false, message = "Không tìm thấy thẻ." });
 
-            await _context.DOCUMENT_TAGS
-                .Where(dt => dt.tag_id == tagId)
-                .ExecuteDeleteAsync();
+            var documentCount = await _context.DOCUMENT_TAGS.CountAsync(dt => dt.tag_id == tagId);
+            if (documentCount > 0) return Conflict(new { message = "Thẻ còn được dùng bởi tài liệu. Hãy gỡ thẻ trước khi xóa.", documentCount });
 
             _context.TAGS.Remove(tag);
             await _context.SaveChangesAsync();
@@ -1037,7 +1067,8 @@ namespace DocShareAPI.Controllers
             [FromQuery] PaginationParams paginationParams,
             [FromQuery] string? status,
             [FromQuery] int? documentId,
-            [FromQuery] Guid? userId)
+            [FromQuery] Guid? userId,
+            [FromQuery] string? search = null)
         {
             if (!TryRequireAdmin(out var error))
                 return error!;
@@ -1045,8 +1076,13 @@ namespace DocShareAPI.Controllers
             var query = _context.REPORTS.AsNoTracking();
 
             if (!string.IsNullOrWhiteSpace(status))
-                query = query.Where(r => r.Status == status);
+                query = query.Where(r => r.Status == ReportStatusPolicy.Label(status));
 
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var term = search.Trim().ToLower();
+                query = query.Where(r => r.Documents.Title.ToLower().Contains(term) || r.Users.Email.ToLower().Contains(term));
+            }
             if (documentId.HasValue)
                 query = query.Where(r => r.document_id == documentId.Value);
 
@@ -1117,7 +1153,9 @@ namespace DocShareAPI.Controllers
                         r.Documents.file_url,
                         r.Documents.is_public,
                         r.Documents.uploaded_at,
-                        r.Documents.download_count
+                        r.Documents.download_count,
+                        owner = new { r.Documents.Users!.user_id, r.Documents.Users.full_name, username = r.Documents.Users.Username, email = r.Documents.Users.Email },
+                        other_report_count = _context.REPORTS.Count(other => other.document_id == r.document_id && other.report_id != reportId)
                     }
                 })
                 .FirstOrDefaultAsync();
@@ -1137,6 +1175,7 @@ namespace DocShareAPI.Controllers
             if (string.IsNullOrWhiteSpace(request.Status))
                 return BadRequest(new { success = false, message = "Trạng thái là bắt buộc." });
 
+            request.Status = ReportStatusPolicy.Label(request.Status);
             var allowedStatuses = new[] { "Chờ giải quyết", "Đang xử lý", "Đã xử lý", "Từ chối" };
             if (!allowedStatuses.Contains(request.Status))
                 return BadRequest(new { success = false, message = "Trạng thái không hợp lệ." });
@@ -1176,6 +1215,29 @@ namespace DocShareAPI.Controllers
                 }
             });
         }
+
+        [HttpPost("reports/{reportId:int}/resolve")]
+        public async Task<IActionResult> ResolveReport(int reportId, [FromBody] ResolveReportRequest request)
+        {
+            if (!TryRequireAdmin(out var error, out var actor)) return error!;
+            if (request.Action is not ("hide_document" or "delete_document" or "reject" or "mark_resolved")) return BadRequest(new { message = "Hành động xử lý không hợp lệ." });
+            if (request.Note?.Length > 2000) return BadRequest(new { message = "Ghi chú tối đa 2000 ký tự." });
+            var report = await _context.REPORTS.Include(r => r.Documents).FirstOrDefaultAsync(r => r.report_id == reportId);
+            if (report == null) return NotFound(new { message = "Không tìm thấy báo cáo." });
+            if (request.Action == "hide_document") report.Documents.is_public = false;
+            if (request.Action == "delete_document") { report.Documents.deleted_at = DateTime.UtcNow; report.Documents.deleted_by = actor!.userID; }
+            report.Status = request.Action == "reject" ? "Từ chối" : "Đã xử lý";
+            AddAudit(actor!.userID, "report.resolved", "report", reportId.ToString(), new { request.Action, request.Note, report.document_id });
+            await _context.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+            {
+                await using var transaction = _context.Database.IsRelational() ? await _context.Database.BeginTransactionAsync() : null;
+                await _notificationService.CreateAsync(report.user_id, "REPORT_STATUS_UPDATED", "Báo cáo đã được xử lý", request.Note ?? report.Status, actor.userID, relatedReportId: reportId, targetUrl: $"/reports/{reportId}");
+                await _context.SaveChangesAsync();
+                if (transaction != null) await transaction.CommitAsync();
+            });
+            return Ok(new { success = true, message = "Đã xử lý báo cáo." });
+        }
+        public class ResolveReportRequest { public string Action { get; set; } = ""; public string? Note { get; set; } }
 
         [HttpDelete("reports/{reportId:int}")]
         public async Task<IActionResult> DeleteReport(int reportId)
@@ -1335,12 +1397,13 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpGet("analytics/documents")]
-        public async Task<IActionResult> GetDocumentAnalytics([FromQuery] int days = 30)
+        public async Task<IActionResult> GetDocumentAnalytics([FromQuery] int days = 30, [FromQuery] string groupBy = "day")
         {
             if (!TryRequireAdmin(out var error))
                 return error!;
 
             days = days <= 0 ? 30 : Math.Min(days, 365);
+            if (groupBy is not ("day" or "week" or "month")) return BadRequest(new { message = "Nhóm thời gian không hợp lệ." });
             var startDate = DateTime.UtcNow.Date.AddDays(-(days - 1));
 
             var uploads = await _context.DOCUMENTS
@@ -1394,11 +1457,8 @@ namespace DocShareAPI.Controllers
                 data = new
                 {
                     days,
-                    uploads = uploads.Select(u => new
-                    {
-                        date = u.date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                        u.count
-                    }),
+                    groupBy,
+                    uploads = AnalyticsSeries.Group(Enumerable.Range(0, days).Select(offset => new CountPoint(startDate.AddDays(offset), uploads.FirstOrDefault(u => u.date == startDate.AddDays(offset))?.count ?? 0)), groupBy),
                     topDocuments,
                     categoryDistribution
                 }
@@ -1435,11 +1495,21 @@ namespace DocShareAPI.Controllers
             if (ids.Count == 0)
                 return;
 
+            await _context.FOLDER_DOCUMENTS.Where(fd => ids.Contains(fd.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_VERSIONS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.COMMENTS.Where(c => ids.Contains(c.document_id)).ExecuteUpdateAsync(set => set.SetProperty(c => c.parent_comment_id, (int?)null));
+            await _context.COMMENTS.Where(c => ids.Contains(c.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_VIEWS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_DOWNLOADS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.SHARE_LINKS.Where(s => s.item_type == "document" && ids.Contains(s.item_id)).ExecuteDeleteAsync();
+            await _context.FAVORITES.Where(f => f.item_type == "document" && ids.Contains(f.item_id)).ExecuteDeleteAsync();
+            await _context.NOTIFICATIONS.Where(n => n.related_document_id.HasValue && ids.Contains(n.related_document_id.Value)).ExecuteUpdateAsync(s => s.SetProperty(n => n.related_document_id, (int?)null));
             await _context.DOCUMENT_CATEGORIES.Where(dc => ids.Contains(dc.document_id)).ExecuteDeleteAsync();
             await _context.DOCUMENT_TAGS.Where(dt => ids.Contains(dt.document_id)).ExecuteDeleteAsync();
             await _context.COLLECTION_DOCUMENTS.Where(cd => ids.Contains(cd.document_id)).ExecuteDeleteAsync();
             await _context.LIKES.Where(l => ids.Contains(l.document_id)).ExecuteDeleteAsync();
             await _context.REPORTS.Where(r => ids.Contains(r.document_id)).ExecuteDeleteAsync();
+            DocumentDependencyTracking.Detach(_context, ids);
         }
 
         private static object ToPagedResponse<T>(PagedList<T> pagedData)
@@ -1458,7 +1528,7 @@ namespace DocShareAPI.Controllers
             };
         }
 
-        private static IQueryable<Users> ApplyUserSort(IQueryable<Users> query, string sortBy, string sortDirection)
+        private IQueryable<Users> ApplyUserSort(IQueryable<Users> query, string sortBy, string sortDirection)
         {
             var descending = string.Equals(sortDirection, "desc", StringComparison.OrdinalIgnoreCase);
             return sortBy.ToLowerInvariant() switch
@@ -1466,20 +1536,28 @@ namespace DocShareAPI.Controllers
                 "username" => descending ? query.OrderByDescending(u => u.Username) : query.OrderBy(u => u.Username),
                 "email" => descending ? query.OrderByDescending(u => u.Email) : query.OrderBy(u => u.Email),
                 "role" => descending ? query.OrderByDescending(u => u.Role) : query.OrderBy(u => u.Role),
+                "document_count" => descending ? query.OrderByDescending(u => u.Documents!.Count) : query.OrderBy(u => u.Documents!.Count),
+                "storage_used_bytes" => descending ? query.OrderByDescending(u => (_context.DOCUMENTS.Where(d => d.user_id == u.user_id).Sum(d => (long?)d.file_size) ?? 0) + (_context.DOCUMENT_VERSIONS.Where(v => v.Document!.user_id == u.user_id && v.asset_id != v.Document.asset_id).Select(v => new { v.document_id, v.asset_id, v.file_size }).Distinct().Sum(v => (long?)v.file_size) ?? 0)) : query.OrderBy(u => (_context.DOCUMENTS.Where(d => d.user_id == u.user_id).Sum(d => (long?)d.file_size) ?? 0) + (_context.DOCUMENT_VERSIONS.Where(v => v.Document!.user_id == u.user_id && v.asset_id != v.Document.asset_id).Select(v => new { v.document_id, v.asset_id, v.file_size }).Distinct().Sum(v => (long?)v.file_size) ?? 0)),
                 _ => descending ? query.OrderByDescending(u => u.created_at) : query.OrderBy(u => u.created_at)
             };
         }
 
-        private static IQueryable<Documents> ApplyDocumentSort(IQueryable<Documents> query, string sortBy, string sortDirection)
+        private IQueryable<Documents> ApplyDocumentSort(IQueryable<Documents> query, string sortBy, string sortDirection)
         {
             var descending = string.Equals(sortDirection, "desc", StringComparison.OrdinalIgnoreCase);
             return sortBy.ToLowerInvariant() switch
             {
                 "title" => descending ? query.OrderByDescending(d => d.Title) : query.OrderBy(d => d.Title),
                 "download_count" => descending ? query.OrderByDescending(d => d.download_count) : query.OrderBy(d => d.download_count),
+                "report_count" => descending ? query.OrderByDescending(d => _context.REPORTS.Count(r => r.document_id == d.document_id)) : query.OrderBy(d => _context.REPORTS.Count(r => r.document_id == d.document_id)),
                 "file_size" => descending ? query.OrderByDescending(d => d.file_size) : query.OrderBy(d => d.file_size),
                 _ => descending ? query.OrderByDescending(d => d.uploaded_at) : query.OrderBy(d => d.uploaded_at)
             };
+        }
+
+        private void AddAudit(Guid actor, string action, string type, string id, object metadata)
+        {
+            _context.AUDIT_LOGS.Add(new AuditLogs { actor_user_id = actor, action = action, entity_type = type, entity_id = id, metadata = System.Text.Json.JsonSerializer.Serialize(metadata), ip_address = HttpContext.Connection.RemoteIpAddress?.ToString() });
         }
 
         private static string NormalizeId(string value)
@@ -1489,13 +1567,14 @@ namespace DocShareAPI.Controllers
                 .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
                 .ToArray())
                 .Normalize(NormalizationForm.FormC)
-                .ToLowerInvariant();
+                .ToLowerInvariant().Replace('đ', 'd');
 
             return Regex.Replace(withoutDiacritics, @"[^a-z0-9]+", "-").Trim('-');
         }
 
         public class AdminUpdateUserRequest
         {
+            public System.Text.Json.JsonElement AvatarUrl { get; set; }
             public string? FullName { get; set; }
             public string? Role { get; set; }
             public bool? IsVerified { get; set; }

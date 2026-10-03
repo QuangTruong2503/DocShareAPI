@@ -22,7 +22,8 @@ namespace DocShareAPI.Controllers
             [FromQuery] PaginationParams paginationParams,
             [FromQuery] string? action = null,
             [FromQuery] string? entityType = null,
-            [FromQuery] Guid? actorUserId = null)
+            [FromQuery] Guid? actorUserId = null,
+            [FromQuery] DateTime? from = null, [FromQuery] DateTime? to = null)
         {
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
@@ -44,6 +45,8 @@ namespace DocShareAPI.Controllers
             if (actorUserId.HasValue)
                 query = query.Where(a => a.actor_user_id == actorUserId.Value);
 
+            if (from.HasValue) query = query.Where(a => a.created_at >= from.Value.Date);
+            if (to.HasValue) { var end = to.Value.Date.AddDays(1); query = query.Where(a => a.created_at < end); }
             query = query.OrderByDescending(a => a.created_at);
 
             var totalCount = await query.CountAsync();
@@ -64,7 +67,8 @@ namespace DocShareAPI.Controllers
                     actor = a.ActorUser == null ? null : new
                     {
                         a.ActorUser.user_id,
-                        a.ActorUser.Username,
+                        username = a.ActorUser.Username,
+                        email = a.ActorUser.Email,
                         a.ActorUser.full_name,
                         a.ActorUser.avatar_url
                     },
@@ -79,6 +83,8 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 success = true,
+                data = logs,
+                options = new { actions = await _context.AUDIT_LOGS.Select(a => a.action).Distinct().ToListAsync(), entityTypes = await _context.AUDIT_LOGS.Select(a => a.entity_type).Distinct().ToListAsync() },
                 auditLogs = logs,
                 logs,
                 pagination = new

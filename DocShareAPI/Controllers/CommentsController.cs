@@ -92,7 +92,7 @@ namespace DocShareAPI.Controllers
             if (document == null)
                 return NotFound(Error("DOCUMENT_NOT_FOUND", "Không tìm thấy tài liệu."));
 
-            if (!await CanViewDocument(document, decodedToken))
+            if (!await CanCommentDocument(document, decodedToken))
                 return Forbid();
 
             Comments? parentComment = null;
@@ -225,6 +225,14 @@ namespace DocShareAPI.Controllers
             await _auditLogService.LogAsync(decodedToken.userID, "comment.deleted", "comment", commentId.ToString(), null, HttpContext.Connection.RemoteIpAddress?.ToString());
 
             return Ok(new { success = true, deletedId = commentId });
+        }
+
+        private async Task<bool> CanCommentDocument(Documents document, DecodedTokenResponse? token)
+        {
+            if (document.deleted_at != null || token == null) return false;
+            if (document.is_public || document.user_id == token.userID || token.roleID == "admin") return true;
+            var folderId = await _context.FOLDER_DOCUMENTS.Where(fd => fd.document_id == document.document_id).Select(fd => (int?)fd.folder_id).FirstOrDefaultAsync();
+            return folderId.HasValue && await _folderPermissionService.CanCommentInFolderAsync(token.userID, folderId.Value);
         }
 
         private async Task<bool> CanViewDocument(Documents document, DecodedTokenResponse? decodedToken)

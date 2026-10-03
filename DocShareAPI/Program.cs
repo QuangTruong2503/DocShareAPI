@@ -9,12 +9,14 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.Limits.MaxRequestBodySize = null;
+    options.Limits.MaxRequestBodySize = 64 * 1024 * 1024;
 });
 
 var sslCaCert = Environment.GetEnvironmentVariable("SSL_CA_CERT");
@@ -152,12 +154,28 @@ builder.Services.AddDistributedMemoryCache(); // Cho 2FA cache
 builder.Services.AddHttpClient<ITwoFactorEmailService, TwoFactorEmailService>();
 
 // Add services to the container.
-builder.Services.AddSignalR();
+var signalR = builder.Services.AddSignalR();
+var redisConnection = Environment.GetEnvironmentVariable("REDIS_CONNECTION") ?? builder.Configuration["Redis:Connection"];
+if (!string.IsNullOrWhiteSpace(redisConnection)) signalR.AddStackExchangeRedis(redisConnection);
 builder.Services.Configure<FormOptions>(options =>
 {
-    options.MultipartBodyLengthLimit = long.MaxValue;
+    options.MultipartBodyLengthLimit = 64 * 1024 * 1024;
 });
-builder.Services.AddControllers();
+builder.Services.AddScoped<AssetDelivery>();
+builder.Services.AddScoped<AssetDeliveryFilter>();
+builder.Services.AddControllers(options => options.Filters.AddService<AssetDeliveryFilter>());
+builder.Services.AddHostedService<AssetCleanupWorker>();
+builder.Services.AddHostedService<NotificationDispatchWorker>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    {
+        var path = context.Request.Path.Value ?? "";
+        if (!path.StartsWith("/api/users/public/") && !path.StartsWith("/api/verification/public/") && !path.EndsWith("/verify-password")) return RateLimitPartition.GetNoLimiter("other");
+        return RateLimitPartition.GetFixedWindowLimiter($"{context.Connection.RemoteIpAddress}:{path}", _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true });
+    });
+});
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -182,10 +200,13 @@ app.UseStaticFiles();
 
 app.UseAuthentication();
 
+app.UseRateLimiter();
 app.UseTokenValidation();
+app.UseMiddleware<DocShareAPI.Middleware.MutationLockMiddleware>();
 
 app.UseAuthorization();
 
+app.MapGet("/api/public/health/ready", async (DocShareDbContext db) => await db.Database.CanConnectAsync() ? Results.Ok(new { status = "ready", buildSha = Environment.GetEnvironmentVariable("BUILD_SHA") ?? "local" }) : Results.StatusCode(503));
 app.MapControllers();
 app.MapHub<NotificationsHub>("/hubs/notifications");
 

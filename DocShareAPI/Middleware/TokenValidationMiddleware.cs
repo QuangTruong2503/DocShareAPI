@@ -103,7 +103,12 @@ public class TokenValidationMiddleware
                         throw new UnauthorizedAccessException("Token not found or expired");
                     }
 
-                    // ✅ Token hợp lệ → lưu vào context
+                    var currentRole = await dbContext.USERS.AsNoTracking()
+                        .Where(u => u.user_id == decodedToken.userID).Select(u => u.Role).FirstOrDefaultAsync();
+                    if (currentRole == null) throw new UnauthorizedAccessException("Account no longer exists");
+                    decodedToken.roleID = currentRole;
+
+                    // Current database role applies to every resource authorization.
                     context.Items[DecodedTokenKey] = decodedToken;
                 }
                 catch

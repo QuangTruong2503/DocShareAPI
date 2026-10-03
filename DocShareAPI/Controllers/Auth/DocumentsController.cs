@@ -218,6 +218,9 @@ namespace DocShareAPI.Controllers.Auth
                 }
 
                 // Upload to Cloudinary
+                if (!IsValidDocument(fileToUpload, out var convertedError)) return BadRequest(new { message = convertedError });
+                quotaError = await ValidateStorageQuota(decodedTokenResponse.userID, fileToUpload.Length);
+                if (quotaError != null) return quotaError;
                 uploadResult = await UploadToCloudinary(fileToUpload);
                 if (uploadResult == null || uploadResult.Error != null)
                 {
@@ -348,6 +351,9 @@ namespace DocShareAPI.Controllers.Auth
                     };
                 }
 
+                if (!IsValidDocument(fileToUpload, out var convertedError)) return BadRequest(new { message = convertedError });
+                quotaError = await ValidateStorageQuota(decodedToken.userID, fileToUpload.Length);
+                if (quotaError != null) return quotaError;
                 uploadResult = await UploadToCloudinary(fileToUpload);
                 if (uploadResult == null || uploadResult.Error != null)
                 {
@@ -487,6 +493,14 @@ namespace DocShareAPI.Controllers.Auth
 
             var uploadedDocuments = new List<object>();
             var uploadResults = await UploadFilesToCloudinaryInParallel(validFiles);
+            quotaError = await ValidateStorageQuota(decodedToken.userID, uploadResults.Where(r => r.Success).Sum(r => r.UploadedFileSize ?? 0));
+            if (quotaError != null)
+            {
+                foreach (var upload in uploadResults.Where(r => r.Success))
+                    AssetCleanup.Queue(_context, upload.UploadResult!.PublicId, upload.UploadResult.AssetId, upload.UploadResult.SecureUrl.ToString());
+                await _context.SaveChangesAsync();
+                return quotaError;
+            }
             failed.AddRange(uploadResults
                 .Where(result => !result.Success)
                 .Select(result => new { fileName = result.OriginalFileName, code = "INTERNAL_ERROR", message = result.ErrorMessage ?? "Không thể tải tài liệu này." }));
@@ -577,6 +591,7 @@ namespace DocShareAPI.Controllers.Auth
                     };
                 }
 
+                if (!IsValidDocument(fileToUpload, out var convertedError)) return CloudinaryUploadResult.Failed(file.FileName, convertedError);
                 uploadResult = await UploadToCloudinary(fileToUpload);
                 if (uploadResult == null || uploadResult.Error != null)
                 {
@@ -975,47 +990,20 @@ namespace DocShareAPI.Controllers.Auth
             var remoteDeleteFailures = new List<object>();
             var deletedDocuments = new List<Documents>();
 
-            foreach (var document in deletableDocuments)
-            {
-                if (string.IsNullOrWhiteSpace(document.public_id))
-                {
-                    deletedDocuments.Add(document);
-                    continue;
-                }
-
-                try
-                {
-                    var result = await DeleteFromCloudinary(document.public_id);
-                    if (result.Deleted != null && result.Deleted.ContainsKey(document.public_id))
-                    {
-                        deletedDocuments.Add(document);
-                        continue;
-                    }
-
-                    remoteDeleteFailures.Add(new
-                    {
-                        document_id = document.document_id,
-                        title = document.Title,
-                        reason = "Không thể xóa tài liệu khỏi Cloudinary."
-                    });
-                }
-                catch (Exception ex)
-                {
-                    remoteDeleteFailures.Add(new
-                    {
-                        document_id = document.document_id,
-                        title = document.Title,
-                        reason = ex.Message
-                    });
-                }
-            }
+            deletedDocuments.AddRange(deletableDocuments);
 
             if (deletedDocuments.Count > 0)
             {
+                await _context.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+                {
+                await using var transaction = await _context.Database.BeginTransactionAsync();
                 var deletedIds = deletedDocuments.Select(d => d.document_id).ToList();
+                await AssetCleanup.QueueDocuments(_context, deletedIds);
                 await DeleteDocumentRelations(deletedIds);
                 _context.DOCUMENTS.RemoveRange(deletedDocuments);
                 await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+                });
             }
 
             var deletedDocumentData = deletedDocuments.Select(d => new
@@ -1101,7 +1089,7 @@ namespace DocShareAPI.Controllers.Auth
                         metadata: new { download_count = document.download_count });
                 }
 
-                return Redirect(downloadUrl);
+                return Redirect(HttpContext.RequestServices.GetRequiredService<AssetDelivery>().Issue(HttpContext, document.document_id));
             }
             catch (Exception ex)
             {
@@ -1190,6 +1178,7 @@ namespace DocShareAPI.Controllers.Auth
             {
                 File = new FileDescription(file.FileName, stream),
                 Folder = folder,
+                Type = "authenticated",
                 UseFilename = true,
                 UniqueFilename = true,
                 Overwrite = false,
@@ -1331,7 +1320,7 @@ namespace DocShareAPI.Controllers.Auth
             var deleteParams = new DelResParams
             {
                 PublicIds = new List<string> { publicId },
-                Type = "upload",
+                Type = "authenticated",
                 ResourceType = ResourceType.Image
             };
 
@@ -1345,11 +1334,21 @@ namespace DocShareAPI.Controllers.Auth
                 return;
 
             await _context.FOLDER_DOCUMENTS.Where(fd => ids.Contains(fd.document_id)).ExecuteDeleteAsync();
+            await _context.FOLDER_DOCUMENTS.Where(fd => ids.Contains(fd.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_VERSIONS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.COMMENTS.Where(c => ids.Contains(c.document_id)).ExecuteUpdateAsync(set => set.SetProperty(c => c.parent_comment_id, (int?)null));
+            await _context.COMMENTS.Where(c => ids.Contains(c.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_VIEWS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.DOCUMENT_DOWNLOADS.Where(v => ids.Contains(v.document_id)).ExecuteDeleteAsync();
+            await _context.SHARE_LINKS.Where(s => s.item_type == "document" && ids.Contains(s.item_id)).ExecuteDeleteAsync();
+            await _context.FAVORITES.Where(f => f.item_type == "document" && ids.Contains(f.item_id)).ExecuteDeleteAsync();
+            await _context.NOTIFICATIONS.Where(n => n.related_document_id.HasValue && ids.Contains(n.related_document_id.Value)).ExecuteUpdateAsync(s => s.SetProperty(n => n.related_document_id, (int?)null));
             await _context.DOCUMENT_CATEGORIES.Where(dc => ids.Contains(dc.document_id)).ExecuteDeleteAsync();
             await _context.DOCUMENT_TAGS.Where(dt => ids.Contains(dt.document_id)).ExecuteDeleteAsync();
             await _context.COLLECTION_DOCUMENTS.Where(cd => ids.Contains(cd.document_id)).ExecuteDeleteAsync();
             await _context.LIKES.Where(l => ids.Contains(l.document_id)).ExecuteDeleteAsync();
             await _context.REPORTS.Where(r => ids.Contains(r.document_id)).ExecuteDeleteAsync();
+            DocumentDependencyTracking.Detach(_context, ids);
         }
 
         private async Task<bool> CanAccessDocumentAsync(Documents document, DecodedTokenResponse decodedToken)
@@ -1380,10 +1379,7 @@ namespace DocShareAPI.Controllers.Auth
                 .Select(u => u.storage_limit_bytes)
                 .FirstOrDefaultAsync() ?? defaultStorageLimitBytes;
 
-            var usedBytes = await _context.DOCUMENTS
-                .AsNoTracking()
-                .Where(d => d.user_id == userId && d.deleted_at == null)
-                .SumAsync(d => (long)d.file_size);
+            var usedBytes = await StorageAccounting.UsedAsync(_context, userId);
 
             if (usedBytes + incomingBytes <= limitBytes)
                 return null;

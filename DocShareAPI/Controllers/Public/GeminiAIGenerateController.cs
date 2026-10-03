@@ -40,7 +40,7 @@ namespace DocShareAPI.Controllers.Public
 
             var document = await _context.DOCUMENTS
                 .AsNoTracking()
-                .Where(d => d.document_id == documentId)
+                .Where(d => d.document_id == documentId && d.deleted_at == null)
                 .Select(d => new
                 {
                     d.document_id,
@@ -70,7 +70,7 @@ namespace DocShareAPI.Controllers.Public
             try
             {
                 // 2. Tải file PDF từ Cloudinary
-                var pdfStream = await _httpClient.GetStreamAsync(document.file_url);
+                var pdfStream = await _httpClient.GetStreamAsync(AssetDelivery.OriginUrl(_cloudinaryService, document.file_url));
 
                 // 3. Trích xuất văn bản
                 string pdfText = ExtractTextFromPdf(pdfStream);

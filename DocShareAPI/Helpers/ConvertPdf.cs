@@ -16,14 +16,15 @@
             }
 
             // Tìm vị trí của "/upload/" trong URL
-            int uploadIndex = pdfUrl.IndexOf("/upload/", StringComparison.OrdinalIgnoreCase);
+            var delivery = pdfUrl.Contains("/authenticated/", StringComparison.OrdinalIgnoreCase) ? "/authenticated/" : "/upload/";
+            int uploadIndex = pdfUrl.IndexOf(delivery, StringComparison.OrdinalIgnoreCase);
             if (uploadIndex == -1)
             {
                 throw new ArgumentException("Invalid Cloudinary URL format.", nameof(pdfUrl));
             }
 
             // Tách URL thành 2 phần: trước và sau "/upload/"
-            string baseUrl = pdfUrl.Substring(0, uploadIndex + "/upload/".Length);
+            string baseUrl = pdfUrl.Substring(0, uploadIndex + delivery.Length);
             string filePart = pdfUrl.Substring(uploadIndex + "/upload/".Length);
 
             // Thay thế phần đuôi ".pdf" bằng ".jpg" trong phần file

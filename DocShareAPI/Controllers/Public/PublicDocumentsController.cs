@@ -31,7 +31,7 @@ namespace DocShareAPI.Controllers.Public
             var decodedToken = HttpContext.Items["DecodedToken"] as DecodedTokenResponse;
 
             // Lấy document (không filter quyền)
-            var document = await _context.DOCUMENTS
+            var document = await _context.DOCUMENTS.Where(d => d.deleted_at == null)
                 .AsNoTracking()
                 .Where(d => d.document_id == documentID)
                 .Select(d => new
@@ -313,7 +313,7 @@ namespace DocShareAPI.Controllers.Public
                 .ToListAsync();
 
             // 3. Query document
-            var query = from doc in _context.DOCUMENTS
+            var query = from doc in _context.DOCUMENTS.Where(d => d.deleted_at == null)
                         join user in _context.USERS on doc.user_id equals user.user_id
                         join dc in _context.DOCUMENT_CATEGORIES on doc.document_id equals dc.document_id
                         where categoryIds.Contains(dc.category_id)

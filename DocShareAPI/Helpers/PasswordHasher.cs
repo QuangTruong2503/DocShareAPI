@@ -35,7 +35,10 @@ namespace ELearningAPI.Helpers
         public static bool VerifyPassword(string password, string storedHash)
         {
             // Chuyển đổi storedHash từ Base64 thành byte[]
-            byte[] hashBytes = Convert.FromBase64String(storedHash);
+            if (string.IsNullOrWhiteSpace(password) || string.IsNullOrWhiteSpace(storedHash)) return false;
+            byte[] hashBytes;
+            try { hashBytes = Convert.FromBase64String(storedHash); } catch (FormatException) { return false; }
+            if (hashBytes.Length != SaltSize + HashSize) return false;
 
             // Lấy salt từ hashBytes
             byte[] salt = new byte[SaltSize];
@@ -46,17 +49,8 @@ namespace ELearningAPI.Helpers
             {
                 byte[] hash = pbkdf2.GetBytes(HashSize);
 
-                // So sánh hash của mật khẩu nhập vào với hash đã lưu
-                for (int i = 0; i < HashSize; i++)
-                {
-                    if (hashBytes[i + SaltSize] != hash[i])
-                    {
-                        return false;
-                    }
-                }
+                return CryptographicOperations.FixedTimeEquals(hashBytes.AsSpan(SaltSize, HashSize), hash);
             }
-
-            return true;
         }
     }
 }

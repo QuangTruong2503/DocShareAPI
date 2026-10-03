@@ -10,6 +10,7 @@ namespace DocShareAPI.Data
         }
         // DbSet properties for each table
         public DbSet<Users> USERS { get; set; }
+        public DbSet<ExternalIdentity> EXTERNAL_IDENTITIES { get; set; }
         public DbSet<Documents> DOCUMENTS { get; set; }
         public DbSet<Categories> CATEGORIES { get; set; }
         public DbSet<DocumentCategories> DOCUMENT_CATEGORIES { get; set; }
@@ -38,6 +39,9 @@ namespace DocShareAPI.Data
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+            modelBuilder.Entity<ExternalIdentity>().HasKey(e => new { e.provider, e.subject });
+            modelBuilder.Entity<ExternalIdentity>().HasIndex(e => new { e.user_id, e.provider }).IsUnique();
+            modelBuilder.Entity<ExternalIdentity>().HasOne(e => e.User).WithMany().HasForeignKey(e => e.user_id).OnDelete(DeleteBehavior.Cascade);
             modelBuilder.Entity<Users>()
                 .Property(u => u.storage_limit_bytes)
                 .HasDefaultValue(10737418240L);

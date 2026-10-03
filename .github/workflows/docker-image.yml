@@ -1,12 +1,25 @@
 name: Build, Push, and Deploy to Render
 
 on:
+  pull_request:
   push:
     branches:
       - master
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet restore DocShareAPI.sln
+      - run: dotnet build DocShareAPI.sln --no-restore --configuration Release
+      - run: dotnet test DocShareAPI.sln --no-build --configuration Release
   build-and-deploy:
+    needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
@@ -32,7 +45,7 @@ jobs:
     # Build image
     - name: Build Docker image with docker-compose
       run: |
-        docker-compose -f docker-compose.yml build
+        docker-compose -f docker-compose.yml build --build-arg BUILD_SHA="$GITHUB_SHA"
 
     # Tag image
     - name: Tag Docker image
@@ -49,7 +62,19 @@ jobs:
     # Trigger Render Deploy
     - name: Trigger Render Deploy
       run: |
-        curl -X POST -H "Content-Type: application/json" -d '{}' ${{ secrets.RENDER_DEPLOY_HOOK }}
+        curl --fail --show-error --silent --get --data-urlencode "imgURL=docker.io/$DOCKER_USERNAME/docshareapi:$GITHUB_SHA" "$RENDER_DEPLOY_HOOK"
       if: success()
       env:
         RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+
+    - name: Verify readiness
+      if: vars.RENDER_HEALTH_URL != ''
+      env:
+        READINESS_URL: ${{ vars.RENDER_HEALTH_URL }}
+      run: |
+        for attempt in $(seq 1 30); do
+          if curl --fail --show-error --silent "$READINESS_URL" | jq -e --arg sha "$GITHUB_SHA" '.status == "ready" and .buildSha == $sha'; then exit 0; fi
+          sleep 10
+        done
+        exit 1
