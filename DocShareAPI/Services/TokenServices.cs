@@ -8,17 +8,20 @@ namespace DocShareAPI.Services
 {
     public class TokenServices
     {
+        public static readonly TimeSpan AccessTokenLifetime = TimeSpan.FromDays(3);
         private readonly string _secretKey;
         public TokenServices(string secretKey)
         {
             _secretKey = secretKey;
         }
-        public string GenerateToken(string userID, string role)
+        public string GenerateToken(string userID, string role, string purpose = "Access")
         {
             var claims = new List<Claim>()
             {
                 new Claim("userID", userID),
                 new Claim("roleID", role),
+                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N")),
+                new Claim("purpose", purpose),
             };
 
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secretKey));
@@ -26,7 +29,7 @@ namespace DocShareAPI.Services
 
             var token = new JwtSecurityToken(
                 claims: claims,
-                expires: DateTime.Now.AddDays(3),
+                expires: DateTime.UtcNow.Add(purpose == "Access" ? AccessTokenLifetime : TimeSpan.FromMinutes(5)),
                 issuer: "DocShare",
                 signingCredentials: creds);
 

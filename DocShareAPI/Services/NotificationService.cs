@@ -121,34 +121,20 @@ namespace DocShareAPI.Services
             if (notifications.Count == 0)
                 return;
 
+            await _context.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+            {
+            var ownsTransaction = _context.Database.IsRelational() && _context.Database.CurrentTransaction == null;
+            await using var transaction = ownsTransaction ? await _context.Database.BeginTransactionAsync() : null;
             _context.NOTIFICATIONS.AddRange(notifications);
             await _context.SaveChangesAsync();
 
-            foreach (var notification in notifications)
-            {
-                await _hubContext.Clients
-                    .Group(NotificationsHub.GetUserGroupName(notification.recipient_user_id))
-                    .SendAsync("ReceiveNotification", ToRealtimeResponse(notification));
-            }
-
-            var recipientIds = notifications
-                .Select(n => n.recipient_user_id)
-                .Distinct()
-                .ToList();
-
-            foreach (var recipientId in recipientIds)
-            {
-                var unreadCount = await _context.NOTIFICATIONS
-                    .AsNoTracking()
-                    .CountAsync(n => n.recipient_user_id == recipientId && !n.is_read);
-
-                await _hubContext.Clients
-                    .Group(NotificationsHub.GetUserGroupName(recipientId))
-                    .SendAsync("UnreadCountChanged", new { unread_count = unreadCount });
-            }
+            _context.AUDIT_LOGS.Add(new AuditLogs { action = "notification.dispatch.pending", entity_type = "notification", metadata = JsonSerializer.Serialize(notifications.Select(n => n.notification_id).ToArray()) });
+            await _context.SaveChangesAsync();
+            if (transaction != null) await transaction.CommitAsync();
+            });
         }
 
-        private static object ToRealtimeResponse(Notifications notification)
+        public static object ToRealtimeResponse(Notifications notification)
         {
             return new
             {

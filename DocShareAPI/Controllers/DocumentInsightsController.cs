@@ -233,7 +233,7 @@ namespace DocShareAPI.Controllers
                 return Forbid();
 
             var normalizedDays = Math.Clamp(days, 1, 365);
-            var since = DateTime.UtcNow.AddDays(-normalizedDays);
+            var since = DateTime.UtcNow.Date.AddDays(-(normalizedDays - 1));
 
             var dailyViewRows = await _context.DOCUMENT_VIEWS
                 .AsNoTracking()
@@ -275,7 +275,8 @@ namespace DocShareAPI.Controllers
                     totalViews,
                     totalDownloads,
                     dailyViews,
-                    dailyDownloads
+                    dailyDownloads,
+                    daily = daysRange.Select(date => new { date = date.ToString("yyyy-MM-dd"), views = dailyViewCounts.GetValueOrDefault(date), downloads = dailyDownloadCounts.GetValueOrDefault(date) })
                 }
             });
         }

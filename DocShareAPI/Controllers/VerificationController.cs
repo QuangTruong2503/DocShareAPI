@@ -561,8 +561,9 @@ namespace DocShareAPI.Controllers
 
             user.password_hash = PasswordHasher.HashPassword(request.newPassword);
 
-            // Vô hiệu hóa token sau khi dùng
-            tokenRecord.is_active = false;
+            // Password change and session revocation are saved atomically.
+            var sessions = await _context.TOKENS.Where(t => t.user_id == user.user_id && t.is_active).ToListAsync();
+            foreach (var session in sessions) session.is_active = false;
 
             await _context.SaveChangesAsync();
 

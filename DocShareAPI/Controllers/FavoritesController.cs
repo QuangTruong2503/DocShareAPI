@@ -45,7 +45,8 @@ namespace DocShareAPI.Controllers
             var items = new List<object>();
             foreach (var favorite in favorites)
             {
-                var item = await BuildFavoriteItem(favorite);
+                if (!await CanViewItem(decodedToken, favorite.item_id, favorite.item_type)) continue;
+                var item = await BuildFavoriteItem(favorite, decodedToken);
                 if (item != null)
                     items.Add(item);
             }
@@ -110,7 +111,7 @@ namespace DocShareAPI.Controllers
             return Ok(new { success = true, id = itemId, type = itemType, isFavorite = request.favorite });
         }
 
-        private async Task<object?> BuildFavoriteItem(Favorites favorite)
+        private async Task<object?> BuildFavoriteItem(Favorites favorite, DecodedTokenResponse token)
         {
             if (favorite.item_type == "document")
             {
@@ -128,7 +129,7 @@ namespace DocShareAPI.Controllers
                     .Select(fd => (int?)fd.folder_id)
                     .FirstOrDefaultAsync();
 
-                return LibraryController.ToDocumentItem(document, folderId, "viewer", true);
+                return LibraryController.ToDocumentItem(document, folderId, document.user_id == token.userID ? "owner" : folderId.HasValue ? await _folderPermissionService.GetRoleAsync(token.userID, folderId.Value) ?? "viewer" : "viewer", true);
             }
 
             if (favorite.item_type == "folder")
@@ -140,7 +141,7 @@ namespace DocShareAPI.Controllers
                     .Include(f => f.FolderDocuments)
                     .FirstOrDefaultAsync(f => f.folder_id == favorite.item_id && f.deleted_at == null);
 
-                return folder == null ? null : LibraryController.ToFolderItem(folder, "viewer", folder.visibility != "private", true);
+                return folder == null ? null : LibraryController.ToFolderItem(folder, await _folderPermissionService.GetRoleAsync(token.userID, folder.folder_id), folder.visibility != "private", true);
             }
 
             var collection = await _context.COLLECTIONS

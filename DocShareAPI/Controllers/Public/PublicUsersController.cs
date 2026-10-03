@@ -32,7 +32,7 @@ namespace DocShareAPI.Controllers.Public
                     u.full_name,
                     u.avatar_url,
                     u.created_at,
-                    public_document_count = _context.DOCUMENTS.Count(d => d.user_id == u.user_id && d.is_public),
+                    public_document_count = _context.DOCUMENTS.Count(d => d.user_id == u.user_id && d.is_public && d.deleted_at == null),
                     public_collection_count = _context.COLLECTIONS.Count(c => c.user_id == u.user_id && c.is_public),
                     follower_count = _context.FOLLOWS.Count(f => f.following_id == u.user_id),
                     following_count = _context.FOLLOWS.Count(f => f.follower_id == u.user_id),
@@ -74,7 +74,7 @@ namespace DocShareAPI.Controllers.Public
                 return NotFound(new { message = "Không tìm thấy người dùng." });
             }
 
-            var documents = await _context.DOCUMENTS
+            var documents = await _context.DOCUMENTS.Where(d => d.deleted_at == null)
                 .AsNoTracking()
                 .Where(d => d.user_id == userID && d.is_public)
                 .OrderByDescending(d => d.uploaded_at)
@@ -150,9 +150,9 @@ namespace DocShareAPI.Controllers.Public
                     c.Description,
                     c.is_public,
                     c.created_at,
-                    document_count = c.CollectionDocuments!.Count(cd => cd.Documents != null && cd.Documents.is_public),
+                    document_count = c.CollectionDocuments!.Count(cd => cd.Documents != null && cd.Documents.is_public && cd.Documents.deleted_at == null),
                     latest_documents = c.CollectionDocuments!
-                            .Where(cd => cd.Documents != null && cd.Documents.is_public)
+                            .Where(cd => cd.Documents != null && cd.Documents.is_public && cd.Documents.deleted_at == null)
                             .OrderByDescending(cd => cd.added_at)
                             .Take(4)
                             .Select(cd => new
@@ -214,7 +214,7 @@ namespace DocShareAPI.Controllers.Public
                 .Where(cd =>
                     cd.collection_id == collectionID &&
                     cd.Documents != null &&
-                    cd.Documents.is_public)
+                    cd.Documents.is_public && cd.Documents.deleted_at == null)
                 .OrderByDescending(cd => cd.added_at)
                 .Select(cd => new
                 {

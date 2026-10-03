@@ -128,12 +128,14 @@ namespace DocShareAPI.Controllers
                     parentFolderId = folder.parent_folder_id,
                     permission = role,
                     canReceiveItems = role is "owner" or "editor",
+                    rootArea = folder.owner_user_id == decodedToken.userID ? "my" : "shared",
+                    isOwner = folder.owner_user_id == decodedToken.userID,
                     children
                 };
             }
 
             var nodes = folders
-                .Where(f => f.parent_folder_id == null)
+                .Where(f => f.parent_folder_id == null || !folders.Any(parent => parent.folder_id == f.parent_folder_id))
                 .Select(ToNode)
                 .ToList();
 
@@ -402,7 +404,7 @@ namespace DocShareAPI.Controllers
             var document = await _context.DOCUMENTS.AsNoTracking().FirstOrDefaultAsync(d => d.document_id == dto.document_id && d.deleted_at == null);
             if (document == null)
                 return NotFound(new { success = false, code = "DOCUMENT_NOT_FOUND", message = "Không tìm thấy tài liệu." });
-            if (!CanAccessDocument(document.user_id, document.is_public, decodedToken))
+            if (document.user_id != decodedToken.userID && decodedToken.roleID != "admin")
                 return Forbid();
 
             var existingFolderId = await _context.FOLDER_DOCUMENTS
@@ -457,10 +459,10 @@ namespace DocShareAPI.Controllers
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized();
 
-            var document = await _context.DOCUMENTS.AsNoTracking().FirstOrDefaultAsync(d => d.document_id == documentId);
+            var document = await _context.DOCUMENTS.AsNoTracking().FirstOrDefaultAsync(d => d.document_id == documentId && d.deleted_at == null);
             if (document == null)
                 return NotFound(new { success = false, code = "DOCUMENT_NOT_FOUND", message = "Không tìm thấy tài liệu." });
-            if (!CanAccessDocument(document.user_id, document.is_public, decodedToken))
+            if (document.user_id != decodedToken.userID && decodedToken.roleID != "admin")
                 return Forbid();
 
             var current = await _context.FOLDER_DOCUMENTS.FirstOrDefaultAsync(fd => fd.document_id == documentId);
@@ -474,23 +476,7 @@ namespace DocShareAPI.Controllers
             {
                 await using var transaction = await _context.Database.BeginTransactionAsync();
 
-                if (current == null)
-                {
-                    _context.FOLDER_DOCUMENTS.Add(new FolderDocuments
-                    {
-                        folder_id = dto.target_folder_id,
-                        document_id = documentId,
-                        added_by_user_id = decodedToken.userID,
-                        added_at = DateTime.UtcNow
-                    });
-                }
-                else
-                {
-                    current.folder_id = dto.target_folder_id;
-                    current.added_by_user_id = decodedToken.userID;
-                    current.added_at = DateTime.UtcNow;
-                }
-
+                await DocumentFolderLinks.MoveAsync(_context, documentId, dto.target_folder_id, decodedToken.userID);
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
             });

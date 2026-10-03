@@ -169,7 +169,14 @@ namespace DocShareAPI.Controllers
             document.pages = newVersion.pages;
             document.thumbnail_url = Helpers.ConvertPdf.ConvertPdfTitleToJpg(newVersion.file_url);
 
-            await _context.SaveChangesAsync();
+            try { await _context.SaveChangesAsync(); }
+            catch
+            {
+                _context.ChangeTracker.Clear();
+                AssetCleanup.Queue(_context, uploadResult.PublicId, uploadResult.AssetId, uploadResult.SecureUrl.ToString());
+                await _context.SaveChangesAsync();
+                return StatusCode(500, Error("VERSION_SAVE_FAILED", "Không lưu được phiên bản. File tải lên đã được đưa vào hàng đợi dọn dẹp."));
+            }
             await _auditLogService.LogAsync(decodedToken.userID, "document_version.created", "document", documentId.ToString(), new { newVersion.version_number }, HttpContext.Connection.RemoteIpAddress?.ToString());
 
             return Ok(new
@@ -235,8 +242,9 @@ namespace DocShareAPI.Controllers
             document.public_id = version.public_id;
             document.asset_id = version.asset_id;
             document.file_size = version.file_size;
+            document.file_type = Path.GetExtension(version.file_url.Split('?')[0]).TrimStart('.').ToLowerInvariant();
             document.pages = version.pages;
-            document.thumbnail_url = Helpers.ConvertPdf.ConvertPdfTitleToJpg(version.file_url);
+            document.thumbnail_url = document.file_type == "pdf" ? Helpers.ConvertPdf.ConvertPdfTitleToJpg(version.file_url) : "";
 
             await _context.SaveChangesAsync();
             await _auditLogService.LogAsync(decodedToken.userID, "document_version.restored", "document", documentId.ToString(), new { versionId, restoredVersion.version_number }, HttpContext.Connection.RemoteIpAddress?.ToString());
@@ -264,7 +272,7 @@ namespace DocShareAPI.Controllers
 
             try
             {
-                using var response = await _httpClient.GetAsync(version.file_url);
+                using var response = await _httpClient.GetAsync(AssetDelivery.OriginUrl(_cloudinaryService, version.file_url));
                 if (!response.IsSuccessStatusCode)
                     return StatusCode(StatusCodes.Status502BadGateway, Error("VERSION_FILE_UNAVAILABLE", "Không tải được file phiên bản."));
 
@@ -307,7 +315,7 @@ namespace DocShareAPI.Controllers
                 .Select(fd => (int?)fd.folder_id)
                 .FirstOrDefaultAsync();
 
-            return folderId.HasValue && await _folderPermissionService.CanAddDocumentToFolderAsync(decodedToken.userID, folderId.Value);
+            return folderId.HasValue && await _folderPermissionService.CanEditFolderAsync(decodedToken.userID, folderId.Value);
         }
 
         private bool IsValidDocument(IFormFile file, out string validationMessage)
@@ -319,9 +327,12 @@ namespace DocShareAPI.Controllers
                 return false;
             }
 
-            if (!_allowedDocumentTypes.Contains(file.ContentType))
+            using var signatureStream = file.OpenReadStream();
+            var header = new byte[5];
+            var read = signatureStream.Read(header, 0, header.Length);
+            if (Path.GetExtension(file.FileName).ToLowerInvariant() != ".pdf" || file.ContentType != "application/pdf" || read != 5 || System.Text.Encoding.ASCII.GetString(header) != "%PDF-")
             {
-                validationMessage = "Loại file không được hỗ trợ.";
+                validationMessage = "Phiên bản mới chỉ hỗ trợ file PDF có nội dung PDF hợp lệ.";
                 return false;
             }
 
@@ -337,10 +348,7 @@ namespace DocShareAPI.Controllers
                 .Select(u => u.storage_limit_bytes)
                 .FirstOrDefaultAsync() ?? defaultStorageLimitBytes;
 
-            var usedBytes = await _context.DOCUMENTS
-                .AsNoTracking()
-                .Where(d => d.user_id == ownerUserId && d.deleted_at == null)
-                .SumAsync(d => (long)d.file_size);
+            var usedBytes = await StorageAccounting.UsedAsync(_context, ownerUserId);
 
             if (usedBytes + incomingBytes <= limitBytes)
                 return null;
@@ -361,6 +369,7 @@ namespace DocShareAPI.Controllers
             {
                 File = new FileDescription(file.FileName, stream),
                 Folder = "DocShare/Documents",
+                Type = "authenticated",
                 UseFilename = true,
                 UniqueFilename = true,
                 Overwrite = false,

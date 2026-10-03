@@ -56,6 +56,7 @@ namespace DocShareAPI.Controllers.Auth
                 data = new
                 {
                     statuses = ReportStatuses,
+                    statusOptions = ReportStatusPolicy.Labels.Select(x => new { code = x.Key, label = x.Value }),
                     suggestedReasons = SuggestedReasons,
                     reasonRules = new
                     {
@@ -320,7 +321,7 @@ namespace DocShareAPI.Controllers.Auth
                 .Where(r => r.user_id == decodedToken.userID);
 
             if (!string.IsNullOrWhiteSpace(status))
-                query = query.Where(r => r.Status == status.Trim());
+                query = query.Where(r => r.Status == ReportStatusPolicy.Label(status.Trim()));
 
             if (documentId.HasValue)
                 query = query.Where(r => r.document_id == documentId.Value);

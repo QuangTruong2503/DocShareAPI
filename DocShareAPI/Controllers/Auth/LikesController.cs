@@ -38,7 +38,7 @@ namespace DocShareAPI.Controllers.Auth
 
             var document = await _context.DOCUMENTS
                 .AsNoTracking()
-                .Where(d => d.document_id == documentId)
+                .Where(d => d.document_id == documentId && d.deleted_at == null)
                 .Select(d => new
                 {
                     d.user_id,

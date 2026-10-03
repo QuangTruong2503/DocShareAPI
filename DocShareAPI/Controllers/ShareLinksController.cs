@@ -29,6 +29,7 @@ namespace DocShareAPI.Controllers
         [HttpPost("/api/share-links")]
         public async Task<IActionResult> CreateOrUpdateShareLink([FromBody] ShareLinkRequest request)
         {
+            await using var mutex = await DatabaseMutex.Acquire(_context, "docshare:share-links");
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
@@ -46,6 +47,10 @@ namespace DocShareAPI.Controllers
                     s.item_type == itemType &&
                     s.revoked_at == null);
 
+            var access = string.IsNullOrWhiteSpace(request.access) ? "anyone_with_link" : request.access.Trim();
+            if (access is not ("anyone_with_link" or "restricted")) return BadRequest(Error("INVALID_ACCESS", "Quyền truy cập link không hợp lệ."));
+            if (request.permission is not (null or "viewer")) return BadRequest(Error("INVALID_PERMISSION", "Link chia sẻ chỉ hỗ trợ quyền xem."));
+            if (request.maxViews <= 0 || request.maxDownloads <= 0 || request.expiresAt <= DateTime.UtcNow) return BadRequest(Error("INVALID_LIMIT", "Giới hạn và thời hạn chia sẻ không hợp lệ."));
             var isNew = link == null;
             link ??= new ShareLinks
             {
@@ -56,7 +61,7 @@ namespace DocShareAPI.Controllers
                 created_at = DateTime.UtcNow
             };
 
-            link.access = string.IsNullOrWhiteSpace(request.access) ? "anyone_with_link" : request.access!.Trim();
+            link.access = access;
             link.permission = NormalizePermission(request.permission);
             link.allow_download = request.allowDownload;
             link.expires_at = request.expiresAt;
@@ -100,6 +105,7 @@ namespace DocShareAPI.Controllers
         [HttpDelete("/api/share-links/{shareLinkId}")]
         public async Task<IActionResult> DeleteShareLink(string shareLinkId)
         {
+            await using var mutex = await DatabaseMutex.Acquire(_context, "docshare:share-links");
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
@@ -158,6 +164,7 @@ namespace DocShareAPI.Controllers
         [HttpGet("/api/s/{shareToken}")]
         public async Task<IActionResult> GetPublicShare(string shareToken)
         {
+            await using var mutex = await DatabaseMutex.Acquire(_context, "docshare:share-links");
             var link = await GetActivePublicLink(shareToken);
             if (link == null)
                 return NotFound(Error("SHARE_LINK_NOT_FOUND", "Không tìm thấy share link."));
@@ -181,6 +188,7 @@ namespace DocShareAPI.Controllers
         [HttpPost("/api/s/{shareToken}/verify-password")]
         public async Task<IActionResult> VerifyPassword(string shareToken, [FromBody] SharePasswordRequest request)
         {
+            await using var mutex = await DatabaseMutex.Acquire(_context, "docshare:share-links");
             var link = await GetActivePublicLink(shareToken);
             if (link == null)
                 return NotFound(Error("SHARE_LINK_NOT_FOUND", "Không tìm thấy share link."));
@@ -200,9 +208,11 @@ namespace DocShareAPI.Controllers
             link.updated_at = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
+            var passwordGrant = HttpContext.RequestServices.GetRequiredService<AssetDelivery>().Issue(HttpContext, link.item_type == "document" ? link.item_id : 0, share: link);
             var item = await BuildShareItem(link);
             return Ok(new
             {
+                passwordGrant,
                 success = true,
                 item,
                 permission = link.permission,
@@ -215,11 +225,12 @@ namespace DocShareAPI.Controllers
         [HttpGet("/api/s/{shareToken}/download")]
         public async Task<IActionResult> DownloadPublicShare(string shareToken)
         {
+            await using var mutex = await DatabaseMutex.Acquire(_context, "docshare:share-links");
             var link = await GetActivePublicLink(shareToken);
             if (link == null)
                 return NotFound(Error("SHARE_LINK_NOT_FOUND", "Không tìm thấy share link."));
 
-            var availabilityError = ValidateAvailability(link);
+            var availabilityError = ValidateAvailability(link, download: true);
             if (availabilityError != null)
                 return availabilityError;
 
@@ -230,7 +241,11 @@ namespace DocShareAPI.Controllers
                 return BadRequest(Error("UNSUPPORTED_ITEM_TYPE", "Chỉ hỗ trợ tải tài liệu qua public share link."));
 
             if (!string.IsNullOrEmpty(link.password_hash))
-                return Forbid();
+            {
+                var grantUrl = Request.Query["grant"].ToString();
+                var ticket = HttpContext.RequestServices.GetRequiredService<AssetDelivery>().Read(grantUrl);
+                if (ticket?.ShareToken != link.token || ticket.ShareRevision != AssetDelivery.ShareRevision(link)) return Forbid();
+            }
 
             var document = await _context.DOCUMENTS.FirstOrDefaultAsync(d => d.document_id == link.item_id && d.deleted_at == null);
             if (document == null)
@@ -249,24 +264,24 @@ namespace DocShareAPI.Controllers
             });
             await _context.SaveChangesAsync();
 
-            return Redirect(document.file_url);
+            return Redirect(HttpContext.RequestServices.GetRequiredService<AssetDelivery>().Issue(HttpContext, document.document_id, share: link));
         }
 
         private async Task<ShareLinks?> GetActivePublicLink(string shareToken)
         {
             return await _context.SHARE_LINKS
-                .FirstOrDefaultAsync(s => s.token == shareToken && s.revoked_at == null);
+                .FirstOrDefaultAsync(s => s.token == shareToken && s.revoked_at == null && s.access == "anyone_with_link");
         }
 
-        private IActionResult? ValidateAvailability(ShareLinks link)
+        private IActionResult? ValidateAvailability(ShareLinks link, bool download = false)
         {
             if (link.expires_at.HasValue && link.expires_at.Value <= DateTime.UtcNow)
                 return StatusCode(StatusCodes.Status410Gone, Error("SHARE_LINK_EXPIRED", "Share link đã hết hạn."));
 
-            if (link.max_views.HasValue && link.view_count >= link.max_views.Value)
+            if (!download && link.max_views.HasValue && link.view_count >= link.max_views.Value)
                 return StatusCode(StatusCodes.Status410Gone, Error("SHARE_LINK_VIEW_LIMIT_REACHED", "Share link đã đạt giới hạn lượt xem."));
 
-            if (link.max_downloads.HasValue && link.download_count >= link.max_downloads.Value)
+            if (download && link.max_downloads.HasValue && link.download_count >= link.max_downloads.Value)
                 return StatusCode(StatusCodes.Status410Gone, Error("SHARE_LINK_DOWNLOAD_LIMIT_REACHED", "Share link đã đạt giới hạn lượt tải."));
 
             return null;
@@ -298,7 +313,7 @@ namespace DocShareAPI.Controllers
                     description = document.Description,
                     fileUrl = document.file_url,
                     previewUrl = document.file_url,
-                    downloadUrl = link.allow_download && string.IsNullOrEmpty(link.password_hash) ? $"/api/s/{link.token}/download" : null,
+                    downloadUrl = link.allow_download ? BuildApiUrl($"/api/s/{link.token}/download?grant={Uri.EscapeDataString(HttpContext.RequestServices.GetRequiredService<AssetDelivery>().Issue(HttpContext, document.document_id, share: link).Split("?grant=")[1])}") : null,
                     thumbnailUrl = document.thumbnail_url,
                     ownerId = document.user_id,
                     ownerName = document.Users?.full_name ?? document.Users?.Username,
@@ -352,7 +367,7 @@ namespace DocShareAPI.Controllers
 
         private async Task<object> ToResponse(ShareLinks link)
         {
-            var baseUrl = _configuration["PublicBaseUrl"] ?? $"{Request.Scheme}://{Request.Host}";
+            var baseUrl = GetFrontendBaseUrl();
             return new
             {
                 id = link.token,
@@ -374,6 +389,25 @@ namespace DocShareAPI.Controllers
             };
         }
 
+        private string GetFrontendBaseUrl()
+        {
+            return (Environment.GetEnvironmentVariable("PUBLIC_BASE_URL")
+                    ?? _configuration["PublicBaseUrl"]
+                    ?? _configuration["DOMAIN"]
+                    ?? $"{Request.Scheme}://{Request.Host}")
+                .TrimEnd('/');
+        }
+
+        private string BuildApiUrl(string path)
+        {
+            var baseUrl = (Environment.GetEnvironmentVariable("API_BASE_URL")
+                    ?? _configuration["ApiBaseUrl"]
+                    ?? $"{Request.Scheme}://{Request.Host}")
+                .TrimEnd('/');
+
+            return $"{baseUrl}/{path.TrimStart('/')}";
+        }
+
         private async Task<string?> GetItemName(ShareLinks link)
         {
             if (link.item_type == "document")
@@ -391,7 +425,7 @@ namespace DocShareAPI.Controllers
         private static string NormalizePermission(string? permission)
         {
             var normalized = permission?.Trim().ToLowerInvariant();
-            return normalized is "viewer" or "editor" ? normalized : "viewer";
+            return "viewer";
         }
 
         private static string GenerateToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(18)).Replace("+", "-").Replace("/", "_").TrimEnd('=');

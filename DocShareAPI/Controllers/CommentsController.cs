@@ -5,6 +5,7 @@ using DocShareAPI.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.RegularExpressions;
 
 namespace DocShareAPI.Controllers
 {
@@ -91,10 +92,11 @@ namespace DocShareAPI.Controllers
             if (document == null)
                 return NotFound(Error("DOCUMENT_NOT_FOUND", "Không tìm thấy tài liệu."));
 
-            if (!await CanViewDocument(document, decodedToken))
+            if (!await CanCommentDocument(document, decodedToken))
                 return Forbid();
 
             Comments? parentComment = null;
+            int? parentCommentId = null;
             if (request.parentCommentId.HasValue)
             {
                 parentComment = await _context.COMMENTS.FirstOrDefaultAsync(c =>
@@ -105,8 +107,7 @@ namespace DocShareAPI.Controllers
                 if (parentComment == null)
                     return NotFound(Error("PARENT_COMMENT_NOT_FOUND", "Không tìm thấy bình luận cha."));
 
-                if (parentComment.parent_comment_id.HasValue)
-                    return BadRequest(Error("COMMENT_DEPTH_LIMIT", "Bình luận chỉ hỗ trợ phản hồi 1 cấp."));
+                parentCommentId = parentComment.parent_comment_id ?? parentComment.comment_id;
             }
 
             var now = DateTime.UtcNow;
@@ -114,7 +115,7 @@ namespace DocShareAPI.Controllers
             {
                 document_id = documentId,
                 user_id = decodedToken.userID,
-                parent_comment_id = parentComment?.comment_id,
+                parent_comment_id = parentCommentId,
                 content = content,
                 created_at = now,
                 updated_at = now
@@ -124,7 +125,23 @@ namespace DocShareAPI.Controllers
             await _context.SaveChangesAsync();
             await _auditLogService.LogAsync(decodedToken.userID, "comment.created", "document", documentId.ToString(), new { comment.comment_id }, HttpContext.Connection.RemoteIpAddress?.ToString());
 
-            if (document.user_id != decodedToken.userID)
+            var mentionedUsers = await GetMentionedUsersAsync(content, decodedToken.userID);
+            if (mentionedUsers.Count > 0)
+            {
+                await _notificationService.CreateManyAsync(mentionedUsers.Select(user => new NotificationCreateRequest
+                {
+                    recipientUserId = user.user_id,
+                    actorUserId = decodedToken.userID,
+                    type = "COMMENT_MENTION",
+                    title = "Bạn được nhắc trong bình luận",
+                    message = $"Bạn được nhắc trong \"{document.Title}\".",
+                    relatedDocumentId = document.document_id,
+                    relatedCommentId = comment.comment_id,
+                    targetUrl = $"/documents/{document.document_id}?comment={comment.comment_id}",
+                    metadata = new { mentionedUsername = user.Username }
+                }));
+            }
+            else if (document.user_id != decodedToken.userID)
             {
                 await _notificationService.CreateAsync(
                     recipientUserId: document.user_id,
@@ -137,7 +154,7 @@ namespace DocShareAPI.Controllers
                     targetUrl: $"/documents/{document.document_id}?comment={comment.comment_id}");
             }
 
-            if (parentComment != null && parentComment.user_id != decodedToken.userID && parentComment.user_id != document.user_id)
+            if (mentionedUsers.Count == 0 && parentComment != null && parentComment.user_id != decodedToken.userID && parentComment.user_id != document.user_id)
             {
                 await _notificationService.CreateAsync(
                     recipientUserId: parentComment.user_id,
@@ -210,6 +227,14 @@ namespace DocShareAPI.Controllers
             return Ok(new { success = true, deletedId = commentId });
         }
 
+        private async Task<bool> CanCommentDocument(Documents document, DecodedTokenResponse? token)
+        {
+            if (document.deleted_at != null || token == null) return false;
+            if (document.is_public || document.user_id == token.userID || token.roleID == "admin") return true;
+            var folderId = await _context.FOLDER_DOCUMENTS.Where(fd => fd.document_id == document.document_id).Select(fd => (int?)fd.folder_id).FirstOrDefaultAsync();
+            return folderId.HasValue && await _folderPermissionService.CanCommentInFolderAsync(token.userID, folderId.Value);
+        }
+
         private async Task<bool> CanViewDocument(Documents document, DecodedTokenResponse? decodedToken)
         {
             if (document.is_public)
@@ -253,6 +278,24 @@ namespace DocShareAPI.Controllers
                 updatedAt = comment.updated_at,
                 replies = replies.Select(r => ToResponse(r, currentUserId, currentUserRole, Array.Empty<Comments>()))
             };
+        }
+
+        private async Task<List<Users>> GetMentionedUsersAsync(string content, Guid actorUserId)
+        {
+            var usernames = Regex.Matches(content, @"(?<![\w.])@([A-Za-z0-9_.-]{2,50})")
+                .Select(match => match.Groups[1].Value)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (usernames.Count == 0)
+                return new List<Users>();
+
+            var normalizedUsernames = usernames.Select(username => username.ToLower()).ToList();
+
+            return await _context.USERS
+                .AsNoTracking()
+                .Where(user => user.user_id != actorUserId && normalizedUsernames.Contains(user.Username.ToLower()))
+                .ToListAsync();
         }
 
         private static object Error(string code, string message, object? details = null) => new { success = false, code, message, details };

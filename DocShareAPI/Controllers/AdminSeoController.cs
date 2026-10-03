@@ -112,6 +112,8 @@ namespace DocShareAPI.Controllers
             if (routeRequests == null)
                 return BadRequest(new { message = "Danh sách routes không hợp lệ.", errors = new[] { "Routes phải là mảng chuỗi hoặc mảng đối tượng." } });
 
+            if (routeRequests.Any(route => string.IsNullOrWhiteSpace(route.Path) || !route.Path.StartsWith("/") || route.Path.StartsWith("//") || route.Path.Any(char.IsWhiteSpace) || route.Path.IndexOfAny(new[] { '?', '#' }) >= 0 || IsPrivateRoute(route.Path)))
+                return BadRequest(new { message = "Route phải là đường dẫn công khai bắt đầu bằng /, không chứa query hoặc khoảng trắng." });
             var routes = routeRequests
                 .Select(NormalizeRoute)
                 .Where(route => route != null && !IsPrivateRoute(route.Path))
@@ -146,7 +148,7 @@ namespace DocShareAPI.Controllers
 
                 var documents = await _context.DOCUMENTS
                     .AsNoTracking()
-                    .Where(d => d.is_public)
+                    .Where(d => d.is_public && d.deleted_at == null)
                     .Select(d => new { d.document_id, d.uploaded_at })
                     .ToListAsync();
 
@@ -158,7 +160,7 @@ namespace DocShareAPI.Controllers
                 var userIds = await _context.USERS
                     .AsNoTracking()
                     .Where(u =>
-                        _context.DOCUMENTS.Any(d => d.user_id == u.user_id && d.is_public) ||
+                        _context.DOCUMENTS.Any(d => d.user_id == u.user_id && d.is_public && d.deleted_at == null) ||
                         _context.COLLECTIONS.Any(c => c.user_id == u.user_id && c.is_public))
                     .Select(u => u.user_id)
                     .ToListAsync();
@@ -284,7 +286,7 @@ namespace DocShareAPI.Controllers
             uri = null;
             return !string.IsNullOrWhiteSpace(url)
                 && Uri.TryCreate(url.Trim(), UriKind.Absolute, out uri)
-                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+                && uri.Scheme == Uri.UriSchemeHttps;
         }
 
         private static string NormalizeSiteUrl(string siteUrl)
@@ -381,7 +383,8 @@ namespace DocShareAPI.Controllers
         private static bool IsPrivateRoute(string path)
         {
             var lower = path.ToLowerInvariant();
-            return lower == "/admin" ||
+            return lower == "/library" || lower.StartsWith("/library/") || lower == "/s" || lower.StartsWith("/s/") || lower == "/upload-document" ||
+                lower == "/admin" ||
                 lower.StartsWith("/admin/") ||
                 lower == "/account" ||
                 lower.StartsWith("/account/") ||
