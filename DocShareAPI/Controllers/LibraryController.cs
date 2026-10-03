@@ -22,6 +22,29 @@ namespace DocShareAPI.Controllers
             _permissionService = permissionService;
         }
 
+        [HttpGet("summary")]
+        public async Task<IActionResult> GetSummary()
+        {
+            if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse token)
+                return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
+            var userId = token.userID;
+            var folders = _context.FOLDERS.AsNoTracking();
+            var documents = _context.DOCUMENTS.AsNoTracking();
+            var myFolders = await folders.CountAsync(f => f.owner_user_id == userId && f.deleted_at == null && f.parent_folder_id == null);
+            var myDocuments = await documents.CountAsync(d => d.user_id == userId && d.deleted_at == null && !_context.FOLDER_DOCUMENTS.Any(fd => fd.document_id == d.document_id && fd.Folder != null && fd.Folder.deleted_at == null));
+            var shared = await folders.CountAsync(f => f.owner_user_id != userId && f.deleted_at == null && f.FolderMembers.Any(m => m.user_id == userId));
+            var team = await folders.CountAsync(f => f.deleted_at == null && f.FolderMembers.Any() && (f.owner_user_id == userId || f.FolderMembers.Any(m => m.user_id == userId)));
+            var favorites = await _context.FAVORITES.CountAsync(f => f.user_id == userId && (
+                (f.item_type == "folder" && folders.Any(x => x.folder_id == f.item_id && x.deleted_at == null && (x.owner_user_id == userId || x.visibility == "public" || x.FolderMembers.Any(m => m.user_id == userId)))) ||
+                (f.item_type == "document" && documents.Any(x => x.document_id == f.item_id && x.deleted_at == null && (x.user_id == userId || x.is_public || token.roleID == "admin" || _context.FOLDER_DOCUMENTS.Any(fd => fd.document_id == x.document_id && fd.Folder != null && fd.Folder.deleted_at == null && (fd.Folder.owner_user_id == userId || fd.Folder.visibility == "public" || fd.Folder.FolderMembers.Any(m => m.user_id == userId))))))));
+            var trash = await folders.CountAsync(f => f.owner_user_id == userId && f.deleted_at != null && f.deleted_root_type == "folder" && f.deleted_root_id == f.folder_id)
+                + await documents.CountAsync(d => (d.user_id == userId || token.roleID == "admin") && d.deleted_at != null && d.deleted_root_type == "document" && d.deleted_root_id == d.document_id);
+            var sharedLinks = await _context.SHARE_LINKS.CountAsync(link => link.owner_user_id == userId && link.revoked_at == null);
+            var usedBytes = await documents.Where(d => d.user_id == userId && d.deleted_at == null).SumAsync(d => (long)d.file_size);
+            var limitBytes = await _context.USERS.Where(u => u.user_id == userId).Select(u => u.storage_limit_bytes).FirstOrDefaultAsync() ?? DefaultStorageLimitBytes;
+            return Ok(new { counts = new { my = myFolders + myDocuments, shared, team, favorites, trash, sharedLinks }, storage = new { usedBytes, limitBytes } });
+        }
+
         [HttpGet("my")]
         public async Task<IActionResult> GetMyLibrary(
             [FromQuery] PaginationParams paginationParams,
@@ -47,16 +70,17 @@ namespace DocShareAPI.Controllers
             [FromQuery] string? fileType = null,
             [FromQuery] Guid? ownerId = null,
             [FromQuery] bool? shared = null,
-            [FromQuery] bool? favorite = null)
+            [FromQuery] bool? favorite = null,
+            [FromQuery] string? rootArea = null)
         {
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
-            return await BuildLibraryResponse(decodedToken.userID, folderId, paginationParams, search, sort, fileType, ownerId, shared, favorite);
+            return await BuildLibraryResponse(decodedToken.userID, folderId, paginationParams, search, sort, fileType, ownerId, shared, favorite, rootArea: rootArea);
         }
 
         [HttpGet("trash")]
-        public async Task<IActionResult> GetTrash([FromQuery] PaginationParams paginationParams, [FromQuery] string? sort = "deleted_desc")
+        public async Task<IActionResult> GetTrash([FromQuery] PaginationParams paginationParams, [FromQuery] string? sort = "deleted_desc", [FromQuery] string? search = null)
         {
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
@@ -99,6 +123,8 @@ namespace DocShareAPI.Controllers
                 .ToList();
 
             var items = SortTrashItems(folderTrash.Concat(documentTrash), sort).ToList();
+            if (!string.IsNullOrWhiteSpace(search))
+                items = items.Where(item => GetItemName(item).Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
             var pagedItems = PageItems(items, paginationParams);
 
             return Ok(new
@@ -111,16 +137,16 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpGet("favorites")]
-        public async Task<IActionResult> GetFavorites([FromQuery] PaginationParams paginationParams)
+        public async Task<IActionResult> GetFavorites([FromQuery] PaginationParams paginationParams, [FromQuery] string? search = null, [FromQuery] string? sort = null, [FromQuery] string? fileType = null)
         {
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
-            return await BuildLibraryResponse(decodedToken.userID, null, paginationParams, null, "updated_desc", null, null, null, true, includeNestedDocuments: true, includeNestedFolders: true);
+            return await BuildLibraryResponse(decodedToken.userID, null, paginationParams, search, sort, fileType, null, null, true, includeNestedDocuments: true, includeNestedFolders: true);
         }
 
         [HttpGet("team")]
-        public async Task<IActionResult> GetTeamLibrary([FromQuery] PaginationParams paginationParams, [FromQuery] string? search = null)
+        public async Task<IActionResult> GetTeamLibrary([FromQuery] PaginationParams paginationParams, [FromQuery] string? search = null, [FromQuery] string? sort = null)
         {
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
@@ -161,6 +187,7 @@ namespace DocShareAPI.Controllers
                 .Cast<object>()
                 .ToList();
 
+            items = SortItems(items, sort).ToList();
             var pagedItems = PageItems(items, paginationParams);
             return Ok(new
             {
@@ -171,16 +198,16 @@ namespace DocShareAPI.Controllers
         }
 
         [HttpGet("recent")]
-        public async Task<IActionResult> GetRecent([FromQuery] PaginationParams paginationParams)
+        public async Task<IActionResult> GetRecent([FromQuery] PaginationParams paginationParams, [FromQuery] string? search = null, [FromQuery] string? sort = null, [FromQuery] string? fileType = null)
         {
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
 
-            return await BuildLibraryResponse(decodedToken.userID, null, paginationParams, null, "updated_desc", null, null, null, null, includeNestedDocuments: true, includeNestedFolders: true);
+            return await BuildLibraryResponse(decodedToken.userID, null, paginationParams, search, sort, fileType, null, null, null, includeNestedDocuments: true, includeNestedFolders: true, foldersFirst: false);
         }
 
         [HttpGet("shared-with-me")]
-        public async Task<IActionResult> GetSharedWithMe([FromQuery] PaginationParams paginationParams, [FromQuery] string? search = null)
+        public async Task<IActionResult> GetSharedWithMe([FromQuery] PaginationParams paginationParams, [FromQuery] string? search = null, [FromQuery] string? sort = null)
         {
             if (HttpContext.Items["DecodedToken"] is not DecodedTokenResponse decodedToken)
                 return Unauthorized(Error("UNAUTHORIZED", "Chưa đăng nhập hoặc token không hợp lệ."));
@@ -199,6 +226,7 @@ namespace DocShareAPI.Controllers
                 .Cast<object>()
                 .ToList();
 
+            items = SortItems(items, sort).ToList();
             var pagedItems = PageItems(items, paginationParams);
             return Ok(new
             {
@@ -259,7 +287,9 @@ namespace DocShareAPI.Controllers
             bool? shared,
             bool? favorite,
             bool includeNestedDocuments = false,
-            bool includeNestedFolders = false)
+            bool includeNestedFolders = false,
+            bool foldersFirst = true,
+            string? rootArea = null)
         {
             if (parentFolderId.HasValue && !await _permissionService.CanViewFolderAsync(userId, parentFolderId.Value))
                 return NotFound(Error("FOLDER_NOT_FOUND", "Không tìm thấy thư mục."));
@@ -272,7 +302,10 @@ namespace DocShareAPI.Controllers
                 ? NormalizeWorkspaceRole(await _permissionService.GetRoleAsync(userId, parentFolderId.Value))
                 : "owner";
 
-            var libraryItems = await BuildLibraryItems(userId, parentFolderId, search, sort, fileType, ownerId, shared, favorite, includeNestedDocuments, includeNestedFolders);
+            var libraryItems = await BuildLibraryItems(userId, parentFolderId, search, sort, fileType, ownerId, shared, favorite, includeNestedDocuments, includeNestedFolders, foldersFirst);
+            var folderRootArea = folderInfo?.owner_user_id == userId ? "my" : "shared";
+            if (rootArea == "team" && folderInfo != null && await _context.FOLDER_MEMBERS.AnyAsync(m => m.folder_id == folderInfo.folder_id))
+                folderRootArea = "team";
             var pagedItems = PageItems(libraryItems.items, paginationParams);
 
             var usedBytes = await _context.DOCUMENTS
@@ -288,7 +321,7 @@ namespace DocShareAPI.Controllers
             return Ok(new
             {
                 folder = parentFolderId.HasValue && folderInfo != null
-                    ? ToFolderContext(folderInfo, role, await BuildBreadcrumb(folderInfo))
+                    ? ToFolderContext(folderInfo, role, await BuildBreadcrumb(folderInfo, userId), folderRootArea)
                     : RootFolderContext(),
                 items = pagedItems.items,
                 pagination = Pagination(pagedItems.currentPage, pagedItems.pageSize, libraryItems.items.Count),
@@ -318,7 +351,8 @@ namespace DocShareAPI.Controllers
             bool? shared,
             bool? favorite,
             bool includeNestedDocuments = false,
-            bool includeNestedFolders = false)
+            bool includeNestedFolders = false,
+            bool foldersFirst = true)
         {
             var normalizedSearch = search?.Trim();
             var foldersQuery = _context.FOLDERS
@@ -328,10 +362,12 @@ namespace DocShareAPI.Controllers
                 .Include(f => f.FolderDocuments)
                     .ThenInclude(fd => fd.Document)
                 .Include(f => f.FolderMembers)
-                .Where(f => f.deleted_at == null && (f.owner_user_id == userId || f.FolderMembers.Any(m => m.user_id == userId)));
+                .Where(f => f.deleted_at == null && (f.owner_user_id == userId || (favorite == true && f.visibility == "public") || f.FolderMembers.Any(m => m.user_id == userId)));
 
             if (!includeNestedFolders)
                 foldersQuery = foldersQuery.Where(f => f.parent_folder_id == parentFolderId);
+            if (!parentFolderId.HasValue && !includeNestedFolders)
+                foldersQuery = foldersQuery.Where(f => f.owner_user_id == userId);
 
             if (!string.IsNullOrWhiteSpace(normalizedSearch))
                 foldersQuery = foldersQuery.Where(f => f.name.Contains(normalizedSearch));
@@ -369,7 +405,9 @@ namespace DocShareAPI.Controllers
             if (includeNestedDocuments)
             {
                 if (!parentFolderId.HasValue)
-                    documentsQuery = documentsQuery.Where(d => d.user_id == userId);
+                    documentsQuery = favorite == true
+                        ? documentsQuery.Where(d => d.user_id == userId || d.is_public || _context.FOLDER_DOCUMENTS.Any(fd => fd.document_id == d.document_id && fd.Folder != null && fd.Folder.deleted_at == null && (fd.Folder.owner_user_id == userId || fd.Folder.visibility == "public" || fd.Folder.FolderMembers.Any(m => m.user_id == userId))))
+                        : documentsQuery.Where(d => d.user_id == userId);
             }
             else if (parentFolderId.HasValue)
             {
@@ -385,7 +423,9 @@ namespace DocShareAPI.Controllers
             if (!string.IsNullOrWhiteSpace(fileType))
             {
                 var normalizedFileType = fileType.Trim().TrimStart('.').ToLowerInvariant();
-                documentsQuery = documentsQuery.Where(d => (d.file_type ?? "").ToLower() == normalizedFileType);
+                documentsQuery = normalizedFileType == "image"
+                    ? documentsQuery.Where(d => new[] { "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg" }.Contains((d.file_type ?? "").ToLower()) || (d.file_type ?? "").StartsWith("image/"))
+                    : documentsQuery.Where(d => ((d.file_type ?? "").ToLower() == normalizedFileType || (d.file_type ?? "").ToLower() == "." + normalizedFileType) || d.Title.ToLower().EndsWith("." + normalizedFileType));
             }
             if (ownerId.HasValue)
                 documentsQuery = documentsQuery.Where(d => d.user_id == ownerId.Value);
@@ -418,7 +458,7 @@ namespace DocShareAPI.Controllers
                 .ToList();
 
             var items = folderItems.Concat(documentItems).ToList();
-            items = SortItems(items, sort).ToList();
+            items = (foldersFirst ? SortItems(folderItems, sort).Concat(SortItems(documentItems, sort)) : SortItems(items, sort)).ToList();
 
             return (items, folderItems.Count, documentItems.Count, folderItems.Count(i => IsShared(i)) + documentItems.Count(i => IsShared(i)));
         }
@@ -615,13 +655,13 @@ namespace DocShareAPI.Controllers
                 id = (int?)null,
                 name = "Tài liệu của tôi",
                 parentFolderId = (int?)null,
-                breadcrumb = new[] { new { id = (int?)null, name = "Tài liệu của tôi", href = "/documents/my" } },
+                breadcrumb = new[] { new { id = (int?)null, name = "Tài liệu của tôi", href = "/library" } },
                 permission = "owner",
                 permissions = ItemPermissions("owner")
             };
         }
 
-        private static object ToFolderContext(Folders folder, string role, List<object> breadcrumb)
+        private static object ToFolderContext(Folders folder, string role, List<object> breadcrumb, string rootArea)
         {
             return new
             {
@@ -632,34 +672,28 @@ namespace DocShareAPI.Controllers
                 isShared = folder.visibility != "private" || folder.FolderMembers.Count > 0,
                 permission = role,
                 breadcrumb,
+                rootArea,
                 permissions = ItemPermissions(role)
             };
         }
 
-        private async Task<List<object>> BuildBreadcrumb(Folders folder)
+        private async Task<List<object>> BuildBreadcrumb(Folders folder, Guid userId)
         {
-            var folders = await _context.FOLDERS.AsNoTracking().ToListAsync();
-            var breadcrumb = new List<object>
-            {
-                new { id = (int?)null, name = "Tài liệu của tôi", href = "/documents/my" }
-            };
-
+            var folders = await _context.FOLDERS.AsNoTracking().Where(f => f.deleted_at == null && (f.owner_user_id == userId || f.visibility == "public" || f.FolderMembers.Any(m => m.user_id == userId))).ToDictionaryAsync(f => f.folder_id);
+            var breadcrumb = new List<object>();
             var stack = new Stack<Folders>();
-            var current = folder;
-            while (current != null)
+            var visited = new HashSet<int>();
+            Folders? current = folder;
+            while (current != null && visited.Add(current.folder_id))
             {
                 stack.Push(current);
-                current = current.parent_folder_id.HasValue
-                    ? folders.FirstOrDefault(f => f.folder_id == current.parent_folder_id.Value)
-                    : null;
+                current = current.parent_folder_id.HasValue && folders.TryGetValue(current.parent_folder_id.Value, out var parent) ? parent : null;
             }
-
             while (stack.Count > 0)
             {
                 var item = stack.Pop();
-                breadcrumb.Add(new { id = (int?)item.folder_id, name = item.name, href = $"/documents/folders/{item.folder_id}" });
+                breadcrumb.Add(new { id = (int?)item.folder_id, name = item.name, href = $"/library/folders/{item.folder_id}" });
             }
-
             return breadcrumb;
         }
 

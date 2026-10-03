@@ -293,11 +293,20 @@ namespace DocShareAPI.Controllers
             if (await _context.FOLDERS.AnyAsync(f => f.owner_user_id == decodedToken.userID && f.parent_folder_id == request.parentFolderId && f.name == name && f.deleted_at == null))
                 return Conflict(Error("FOLDER_NAME_EXISTS", "Tên thư mục này đã tồn tại."));
 
+            var requested = request.items ?? new List<LibraryItemRef>();
+            if (requested.Count < 2 || requested.Any(item => item.type != "document") || requested.Select(item => item.id).Distinct().Count() != requested.Count)
+                return BadRequest(Error("VALIDATION_ERROR", "Chọn ít nhất hai tài liệu khác nhau để gom."));
+            var allowed = await _context.DOCUMENTS.CountAsync(d => requested.Select(item => item.id).Contains(d.document_id) && d.deleted_at == null && (d.user_id == decodedToken.userID || decodedToken.roleID == "admin"));
+            if (allowed != requested.Count)
+                return StatusCode(403, Error("FORBIDDEN", "Bạn không có quyền di chuyển một hoặc nhiều tài liệu."));
+
             var strategy = _context.Database.CreateExecutionStrategy();
             Folders? folder = null;
             var moved = new List<object>();
             var failed = new List<object>();
 
+            try
+            {
             await strategy.ExecuteAsync(async () =>
             {
                 await using var transaction = await _context.Database.BeginTransactionAsync();
@@ -329,6 +338,13 @@ namespace DocShareAPI.Controllers
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
             });
+
+            }
+            catch (InvalidOperationException error) when (error.Message == "MERGE_MOVE_FAILED")
+            {
+                _context.ChangeTracker.Clear();
+                return BadRequest(new { success = false, code = "MERGE_MOVE_FAILED", message = "Không thể gom tài liệu; chưa có thay đổi nào được lưu.", failed });
+            }
 
             return Ok(new
             {

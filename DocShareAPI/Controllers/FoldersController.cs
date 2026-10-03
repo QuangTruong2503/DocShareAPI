@@ -128,12 +128,14 @@ namespace DocShareAPI.Controllers
                     parentFolderId = folder.parent_folder_id,
                     permission = role,
                     canReceiveItems = role is "owner" or "editor",
+                    rootArea = folder.owner_user_id == decodedToken.userID ? "my" : "shared",
+                    isOwner = folder.owner_user_id == decodedToken.userID,
                     children
                 };
             }
 
             var nodes = folders
-                .Where(f => f.parent_folder_id == null)
+                .Where(f => f.parent_folder_id == null || !folders.Any(parent => parent.folder_id == f.parent_folder_id))
                 .Select(ToNode)
                 .ToList();
 
