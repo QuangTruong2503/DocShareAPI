@@ -203,6 +203,10 @@ ALTER TABLE `USERS`
     MODIFY COLUMN `two_factor_method` ENUM('Email', 'SMS', 'App') NULL;
 
 -- Add token types currently present in DocShareAPI.Models.TokenType.
+-- The device field also stores persisted 2FA challenge JSON.
+ALTER TABLE `TOKENS`
+    MODIFY COLUMN `user_device` TEXT NULL;
+
 -- Keep TwoFactor for compatibility with any old rows already using that value.
 ALTER TABLE `TOKENS`
     MODIFY COLUMN `type` ENUM(

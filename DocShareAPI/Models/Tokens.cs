@@ -22,6 +22,8 @@ namespace DocShareAPI.Models
 
         public bool is_active { get; set; } // Mặc định token còn hiệu lực
 
+        // Also stores persisted 2FA challenge JSON, which exceeds legacy varchar(45).
+        [Column(TypeName = "text")]
         public string? user_device { get; set; }
 
         public Users? Users { get; set; }

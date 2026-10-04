@@ -139,10 +139,9 @@ namespace DocShareAPI.Controllers
 
                     // Gửi mã 2FA (tùy vào phương thức)
                     string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode(); // Tạo mã 6 số
-                    await SendTwoFactorCode(user, twoFactorCode, "Đăng nhập"); // Gửi qua email/SMS/app
-
-                    // Lưu mã 2FA vào cache hoặc database (có thời hạn)
-                    await TwoFactorChallenges.SaveAsync(_context, tempTokenEntity.token_id, twoFactorCode);
+                    if (!await TwoFactorChallenges.SaveAsync(_context, tempTokenEntity.token_id, twoFactorCode))
+                        return StatusCode(500, new { message = "Không thể lưu mã xác thực. Vui lòng thử lại.", success = false });
+                    await SendTwoFactorCode(user, twoFactorCode, "Đăng nhập");
 
                     return Ok(new
                     {
@@ -428,8 +427,9 @@ namespace DocShareAPI.Controllers
 
             // Tạo và gửi mã 2FA
             string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode();
+            if (!await TwoFactorChallenges.SaveAsync(_context, tempTokenEntity.token_id, twoFactorCode))
+                return StatusCode(500, new { message = "Không thể lưu mã xác thực. Vui lòng thử lại.", success = false });
             await SendTwoFactorCode(user, twoFactorCode, "Bật xác thực hai yếu tố");
-            await TwoFactorChallenges.SaveAsync(_context, tempTokenEntity.token_id, twoFactorCode);
 
             return Ok(new
             {
@@ -607,12 +607,7 @@ namespace DocShareAPI.Controllers
 
             try
             {
-                payload = await GoogleJsonWebSignature.ValidateAsync(
-                    request.token,
-                    new GoogleJsonWebSignature.ValidationSettings
-                    {
-                        Audience = new[] { googleClientId }
-                    });
+                payload = await ValidateGoogleTokenAsync(request.token, googleClientId);
 
             }
             catch
@@ -624,7 +619,7 @@ namespace DocShareAPI.Controllers
                 });
             }
 
-            if (!payload.EmailVerified)
+            if (!payload.EmailVerified || string.IsNullOrWhiteSpace(payload.Email))
             {
                 return Unauthorized(new
                 {
@@ -659,12 +654,11 @@ namespace DocShareAPI.Controllers
                 return Conflict(new { message = "Định danh Google đã liên kết với tài khoản khác." });
             if (identity == null)
             {
-                user = await _context.USERS.FirstOrDefaultAsync(u => u.Email == payload.Email.Trim().ToLower());
+                var normalizedEmail = payload.Email.Trim().ToLowerInvariant();
+                user = await _context.USERS.FirstOrDefaultAsync(u => u.Email.ToLower() == normalizedEmail);
                 var confirmedSession = HttpContext.Items["DecodedToken"] is DecodedTokenResponse session && user != null && session.userID == user.user_id;
                 if (HttpContext.Request.Path.Value?.EndsWith("/link-google", StringComparison.OrdinalIgnoreCase) == true && !confirmedSession)
                     return Conflict(new { message = "Định danh Google phải có cùng email với tài khoản đang đăng nhập." });
-                if (user != null && (!user.is_verified || (!confirmedSession && !PasswordHasher.VerifyPassword(request.linkPassword ?? "", user.password_hash))))
-                    return Conflict(new { success = false, code = "GOOGLE_LINK_CONFIRMATION_REQUIRED", message = "Tài khoản đã tồn tại. Cần xác minh tài khoản và cung cấp mật khẩu để liên kết Google." });
                 if (user != null && await _context.EXTERNAL_IDENTITIES.AnyAsync(i => i.user_id == user.user_id && i.provider == "google"))
                     return Conflict(new { message = "Tài khoản đã liên kết với một định danh Google khác." });
             }
@@ -686,6 +680,10 @@ namespace DocShareAPI.Controllers
 
                 _context.USERS.Add(user);
             }
+
+            // Google has verified ownership of the email before reaching this point.
+            // Reuse the existing account without requiring its local password.
+            user.is_verified = true;
 
             if (identity == null && !user.two_factor_enabled)
             {
@@ -717,10 +715,9 @@ namespace DocShareAPI.Controllers
 
                     // Gửi mã 2FA (tùy vào phương thức)
                     string twoFactorCode = GenerateRandomCode.GenerateTwoFactorCode(); // Tạo mã 6 số
-                    await SendTwoFactorCode(user, twoFactorCode, "Đăng nhập"); // Gửi qua email/SMS/app
-
-                    // Lưu mã 2FA vào cache hoặc database (có thời hạn)
-                    await TwoFactorChallenges.SaveAsync(_context, tempTokenEntity.token_id, twoFactorCode, googleSubject: identity == null ? payload.Subject : null);
+                    if (!await TwoFactorChallenges.SaveAsync(_context, tempTokenEntity.token_id, twoFactorCode, googleSubject: identity == null ? payload.Subject : null))
+                        return StatusCode(500, new { message = "Không thể lưu mã xác thực. Vui lòng thử lại.", success = false });
+                    await SendTwoFactorCode(user, twoFactorCode, "Đăng nhập");
 
                     return Ok(new
                     {
@@ -769,6 +766,12 @@ namespace DocShareAPI.Controllers
                 user = BuildUserResponse(user)
             });
         }
+
+        protected virtual Task<GoogleJsonWebSignature.Payload> ValidateGoogleTokenAsync(string token, string clientId)
+            => GoogleJsonWebSignature.ValidateAsync(token, new GoogleJsonWebSignature.ValidationSettings
+            {
+                Audience = new[] { clientId }
+            });
 
         //Logout
         [HttpPost("request-logout")]

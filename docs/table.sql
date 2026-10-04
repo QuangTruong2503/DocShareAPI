@@ -389,7 +389,7 @@ CREATE TABLE "TOKENS" (
   "expires_at" datetime NOT NULL,
   "created_at" datetime DEFAULT NULL,
   "is_active" tinyint NOT NULL DEFAULT '1',
-  "user_device" varchar(45) DEFAULT NULL,
+  "user_device" text DEFAULT NULL,
   PRIMARY KEY ("token_id"),
   KEY "fk_user_token_idx" ("user_id"),
   CONSTRAINT "fk_user_token" FOREIGN KEY ("user_id") REFERENCES "USERS" ("user_id") ON DELETE CASCADE ON UPDATE CASCADE

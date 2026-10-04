@@ -8,7 +8,8 @@ using Microsoft.EntityFrameworkCore;
 namespace DocShareAPI.Services;
 
 // Challenge state is persisted with the temporary token, using its existing device
-// metadata field. No per-process OTP cache or schema change is required.
+// metadata field. Existing databases must widen TOKENS.user_device to TEXT;
+// see docs/two-factor-challenge-migration.sql.
 public static class TwoFactorChallenges
 {
     private record State(string CodeHash, int Attempts, int Resends, DateTime SentAt, string? GoogleSubject = null);
