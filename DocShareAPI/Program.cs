@@ -141,13 +141,15 @@ builder.Services.AddScoped<TwoFactorEmailService>();
 builder.Services.AddHttpClient(); // Register HttpClient
 
 
-// Add the GeminiAIOptions configuration
-builder.Services.Configure<GeminiAIOptions>(options =>
+builder.Services.AddSingleton(OpenAIOptions.FromConfiguration(builder.Configuration));
+builder.Services.AddHttpClient<IOpenAITextService, OpenAITextService>(client =>
 {
-    options.ApiKey = Environment.GetEnvironmentVariable("GEMINI_API_KEY")
-        ?? builder.Configuration["GeminiApiKey"]
-        ?? throw new InvalidOperationException("Gemini API Key is required.");
+    client.BaseAddress = new Uri("https://api.openai.com/v1/");
+    client.Timeout = Timeout.InfiniteTimeSpan; // Service applies an overall deadline, including retries.
 });
+builder.Services.AddHttpClient("ai-documents", client => client.Timeout = TimeSpan.FromSeconds(30))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddScoped<IAIDocumentReader, AIDocumentReader>();
 // ===== 2FA Services =====
 builder.Services.AddDistributedMemoryCache(); // Cho 2FA cache
 // Đăng ký HttpClient cho TwoFactorEmailService
@@ -164,6 +166,7 @@ builder.Services.Configure<FormOptions>(options =>
 builder.Services.AddScoped<AssetDelivery>();
 builder.Services.AddScoped<AssetDeliveryFilter>();
 builder.Services.AddControllers(options => options.Filters.AddService<AssetDeliveryFilter>());
+builder.Services.AddProblemDetails();
 builder.Services.AddHostedService<AssetCleanupWorker>();
 builder.Services.AddHostedService<NotificationDispatchWorker>();
 builder.Services.AddRateLimiter(options =>
@@ -171,7 +174,9 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
     {
-        var path = context.Request.Path.Value ?? "";
+        var path = (context.Request.Path.Value ?? "").ToLowerInvariant();
+        if (path.StartsWith("/api/public/ai/") || path.StartsWith("/api/public/gemini/"))
+            return RateLimitPartition.GetFixedWindowLimiter($"ai:{context.Connection.RemoteIpAddress}", _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true });
         if (!path.StartsWith("/api/users/public/") && !path.StartsWith("/api/verification/public/") && !path.EndsWith("/verify-password")) return RateLimitPartition.GetNoLimiter("other");
         return RateLimitPartition.GetFixedWindowLimiter($"{context.Connection.RemoteIpAddress}:{path}", _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true });
     });
@@ -193,6 +198,13 @@ if (app.Environment.IsDevelopment())
 app.UseRouting();
 
 app.UseCors("AllowSpecificOrigins");
+
+if (!app.Environment.IsDevelopment())
+{
+    // Handle downstream failures inside CORS so browsers can read the error response.
+    // The exception handler logs the cause and returns a generic Problem Details body.
+    app.UseExceptionHandler();
+}
 
 app.UseHttpsRedirection();
 

@@ -38,7 +38,7 @@ namespace DocShareAPI.Controllers
                 return BadRequest(Error("VALIDATION_ERROR", "itemId và itemType hợp lệ là bắt buộc."));
 
             if (!await CanShare(decodedToken, request.itemId, itemType))
-                return Forbid();
+                return StatusCode(StatusCodes.Status403Forbidden, Error("SHARE_FORBIDDEN", "Chỉ chủ sở hữu mới có thể tạo liên kết chia sẻ."));
 
             var link = await _context.SHARE_LINKS
                 .FirstOrDefaultAsync(s =>
@@ -50,7 +50,14 @@ namespace DocShareAPI.Controllers
             var access = string.IsNullOrWhiteSpace(request.access) ? "anyone_with_link" : request.access.Trim();
             if (access is not ("anyone_with_link" or "restricted")) return BadRequest(Error("INVALID_ACCESS", "Quyền truy cập link không hợp lệ."));
             if (request.permission is not (null or "viewer")) return BadRequest(Error("INVALID_PERMISSION", "Link chia sẻ chỉ hỗ trợ quyền xem."));
-            if (request.maxViews <= 0 || request.maxDownloads <= 0 || request.expiresAt <= DateTime.UtcNow) return BadRequest(Error("INVALID_LIMIT", "Giới hạn và thời hạn chia sẻ không hợp lệ."));
+            var expiresAt = request.expiresAt switch
+            {
+                null => (DateTime?)null,
+                { Kind: DateTimeKind.Utc } value => value,
+                { Kind: DateTimeKind.Local } value => value.ToUniversalTime(),
+                var value => DateTime.SpecifyKind(value.Value, DateTimeKind.Utc)
+            };
+            if (request.maxViews <= 0 || request.maxDownloads <= 0 || expiresAt <= DateTime.UtcNow) return BadRequest(Error("INVALID_LIMIT", "Giới hạn và thời hạn chia sẻ không hợp lệ."));
             var isNew = link == null;
             link ??= new ShareLinks
             {
@@ -64,7 +71,7 @@ namespace DocShareAPI.Controllers
             link.access = access;
             link.permission = NormalizePermission(request.permission);
             link.allow_download = request.allowDownload;
-            link.expires_at = request.expiresAt;
+            link.expires_at = expiresAt;
             link.max_views = request.maxViews;
             link.max_downloads = request.maxDownloads;
             link.updated_at = DateTime.UtcNow;
@@ -290,7 +297,10 @@ namespace DocShareAPI.Controllers
         private async Task<bool> CanShare(DecodedTokenResponse decodedToken, int itemId, string itemType)
         {
             if (itemType == "document")
-                return await _context.DOCUMENTS.AnyAsync(d => d.document_id == itemId && d.deleted_at == null && (d.user_id == decodedToken.userID || decodedToken.roleID == "admin"));
+            {
+                var isAdmin = string.Equals(decodedToken.roleID, "admin", StringComparison.OrdinalIgnoreCase);
+                return await _context.DOCUMENTS.AnyAsync(d => d.document_id == itemId && d.deleted_at == null && (d.user_id == decodedToken.userID || isAdmin));
+            }
 
             return await _context.FOLDERS.AnyAsync(f => f.folder_id == itemId && f.deleted_at == null && f.owner_user_id == decodedToken.userID);
         }
@@ -383,9 +393,9 @@ namespace DocShareAPI.Controllers
                 downloads = link.download_count,
                 maxViews = link.max_views,
                 maxDownloads = link.max_downloads,
-                expiresAt = link.expires_at,
-                createdAt = link.created_at,
-                updatedAt = link.updated_at
+                expiresAt = link.expires_at.HasValue ? DateTime.SpecifyKind(link.expires_at.Value, DateTimeKind.Utc) : (DateTime?)null,
+                createdAt = DateTime.SpecifyKind(link.created_at, DateTimeKind.Utc),
+                updatedAt = DateTime.SpecifyKind(link.updated_at, DateTimeKind.Utc)
             };
         }
 

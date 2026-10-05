@@ -426,12 +426,12 @@ Không có `appsettings.json` cơ sở trong danh sách source hiện tại. `ap
 | `APP_NAME` | `APP_NAME`, mặc định DocShare | Tên trong email |
 | `PUBLIC_BASE_URL` | `PublicBaseUrl`, `DOMAIN`, request host | URL frontend share |
 | `API_BASE_URL` | `ApiBaseUrl`, request host | URL API share download |
-| `GEMINI_API_KEY` | `GeminiApiKey` | Options còn đăng ký dù controller AI không được compile |
+| `OPEN_AI_API_KEY` | `OpenAIKey` | Chat và tóm tắt dùng OpenAI; biến môi trường được ưu tiên. Xem [hướng dẫn cấu hình AI](openai-ai-setup.md). |
 | `MaxFileSize` | Giá trị trực tiếp qua configuration | Mặc định 10×1024×1024 byte |
 | `AllowedDocumentTypes` | Array configuration | Mặc định PDF/DOC/TXT/DOCX MIME |
 | `Cloudinary__MaxParallelUploads` | `Cloudinary:MaxParallelUploads` | Mặc định 3, clamp 1–6 |
 
-Với key cấu hình phân cấp dùng environment provider .NET, sử dụng `__`, ví dụ `ConnectionStrings__MysqlConnection`. Array MIME dùng `AllowedDocumentTypes__0`, `__1`, v.v. Gemini options được đọc theo yêu cầu, nên đăng ký callback không chứng minh startup luôn yêu cầu Gemini key khi không có consumer.
+Với key cấu hình phân cấp dùng environment provider .NET, sử dụng `__`, ví dụ `ConnectionStrings__MysqlConnection`. Array MIME dùng `AllowedDocumentTypes__0`, `__1`, v.v. Phần đánh giá Gemini ở trên phản ánh thời điểm review; chức năng AI hiện đã chuyển sang OpenAI và controller được đưa vào bản build.
 
 ### 9.2. Chạy local
 
@@ -916,7 +916,7 @@ Phần rà soát phía trên mô tả trạng thái trước khi sửa. Bảng d
 | F07 | Bình luận dùng capability comment; upload/restore version dùng capability edit. |
 | F08 | OTP dùng RNG mật mã, hash theo challenge; trạng thái trong DB có giới hạn 5 lần thử, cooldown 60 giây, tối đa 3 resend và single use. |
 | F09 | Reset mật khẩu thu hồi mọi token đang hoạt động của tài khoản trong cùng lần lưu. |
-| F10 | Google login giữ bước 2FA. External identity có unique provider/subject và user/provider; tài khoản có sẵn cần xác nhận mật khẩu hoặc phiên đăng nhập. Với 2FA, chỉ ghi liên kết sau khi challenge thành công. FE có dialog xác nhận liên kết. |
+| F10 | Google login giữ bước 2FA. External identity có unique provider/subject và user/provider; email đã được Google xác minh tự dùng tài khoản có sẵn, không yêu cầu mật khẩu. Với 2FA, chỉ ghi liên kết sau khi challenge thành công. |
 | F11 | Quota tính cả trash và asset phiên bản khác nhau, copy tính quota; upload kiểm tra lại kích thước sau chuyển đổi. MySQL advisory lock tuần tự hóa quota theo owner. |
 | F12 | Chọn chính sách upload version PDF-only, kiểm tra extension/MIME/signature/kích thước; FE giới hạn PDF tương ứng. Restore phiên bản cũ giữ file type phù hợp. |
 | F13 | MySQL advisory lock bảo vệ số version theo owner và thao tác share/counter. |
@@ -931,7 +931,7 @@ Phần rà soát phía trên mô tả trạng thái trước khi sửa. Bảng d
 ### Điều kiện triển khai và giới hạn kiểm chứng
 
 - Áp dụng [external-identities-migration.sql](external-identities-migration.sql) **trước** khi deploy. Script lấy type/charset/collation thực tế của USERS.user_id. Kiểm tra trên staging MySQL và backup trước khi chạy; chưa thực thi trong task này.
-- Không tự backfill subject Google bằng email. Tài khoản Google cũ chưa có mật khẩu có thể đặt mật khẩu bằng luồng reset rồi xác nhận liên kết; endpoint `POST /api/Users/link-google` cũng cho phép liên kết bằng phiên Access hợp lệ có cùng email.
+- Không tự backfill subject Google bằng email. Đăng nhập bằng Google token hợp lệ có email đã xác minh sẽ dùng tài khoản cùng email mà không yêu cầu mật khẩu; tài khoản bật 2FA vẫn cần hoàn tất challenge. Endpoint `POST /api/Users/link-google` yêu cầu phiên Access hợp lệ có cùng email.
 - Asset Cloudinary cũ thuộc delivery type `upload` vẫn có thể được đọc qua URL đã phát hành. Cần migration sang authenticated và invalidation CDN, cập nhật URL/public_id/asset_id cho document và version, rồi kiểm tra revoke/download trên staging. Gateway không thể thu hồi byte mà người dùng đã tải hoặc lưu từ preview trước đó.
 - Cấu hình API_BASE_URL HTTPS, REDIS_CONNECTION khi chạy nhiều instance, reverse proxy body cap và rate limiter chung ở gateway. Bộ rate limiter ASP.NET hiện áp dụng theo instance; OTP attempt/resend dùng DB chung.
 - Worker dùng bảng AUDIT_LOGS hiện có làm hàng đợi cleanup/notification, không cần bảng outbox mới. Theo dõi job pending và log retry; có thể chuyển sang outbox riêng khi quy mô tăng.

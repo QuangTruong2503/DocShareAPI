@@ -77,6 +77,8 @@ namespace DocShareAPI.Controllers.Public
             }
 
             var folderAccess = await GetFolderAccessAsync(document.document_id, decodedToken);
+            bool isOwner = decodedToken != null && decodedToken.userID == document.user_id;
+            bool isAdmin = string.Equals(decodedToken?.roleID, "admin", StringComparison.OrdinalIgnoreCase);
 
             // Nếu document private thì vẫn cho xem khi người dùng xem được folder chứa tài liệu.
             if (!document.is_public)
@@ -85,9 +87,6 @@ namespace DocShareAPI.Controllers.Public
                 {
                     return Unauthorized(new { message = "Bạn cần đăng nhập để truy cập tài liệu này." });
                 }
-
-                bool isOwner = decodedToken != null && decodedToken.userID == document.user_id;
-                bool isAdmin = string.Equals(decodedToken?.roleID, "admin", StringComparison.OrdinalIgnoreCase);
 
                 if (!isOwner && !isAdmin && !folderAccess.CanView)
                 {
@@ -112,6 +111,7 @@ namespace DocShareAPI.Controllers.Public
                 document.dislike_count,
                 document.myReaction,
                 document.categories,
+                can_share = isOwner || isAdmin,
                 parent_folder_id = folderAccess.FolderId,
                 folder_visibility = folderAccess.Visibility,
                 access_source = document.is_public ? "public_document" : folderAccess.CanView ? "folder" : "owner_or_admin"
